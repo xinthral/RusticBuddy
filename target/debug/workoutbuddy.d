@@ -1,0 +1,1 @@
+C:\Users\PC\GitHub\RusticBuddy\target\debug\workoutbuddy.exe: C:\Users\PC\GitHub\RusticBuddy\src\app.rs C:\Users\PC\GitHub\RusticBuddy\src\database.rs C:\Users\PC\GitHub\RusticBuddy\src\main.rs C:\Users\PC\GitHub\RusticBuddy\src\models.rs C:\Users\PC\GitHub\RusticBuddy\src\ui.rs
