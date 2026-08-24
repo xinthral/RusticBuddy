@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use crate::app::{App, Screen};
-use crate::models::ExerciseType;
+use crate::models::{ExerciseType, Ingredient};
 
 /// @brief Top-level draw entry point: lays out header/body/footer and dispatches the body to the handler for the current screen.
 /// @param frame The ratatui frame to draw into for this tick.
@@ -37,13 +37,26 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::Dashboard => render_dashboard(frame, app, chunks[1]),
         Screen::WorkoutList => render_workout_list(frame, app, chunks[1]),
         Screen::WorkoutDetail => render_workout_detail(frame, app, chunks[1]),
-        Screen::AddWorkout | Screen::AddExercise | Screen::LogMetrics | Screen::AddToLibrary => {
+        Screen::AddWorkout
+        | Screen::AddExercise
+        | Screen::LogMetrics
+        | Screen::AddToLibrary
+        | Screen::AddRecipe
+        | Screen::AddRecipeIngredient
+        | Screen::AddIngredient
+        | Screen::SetIngredientStock => {
             render_form(frame, app, chunks[1]);
         }
         Screen::ExerciseTypeSelect => render_type_select(frame, app, chunks[1]),
         Screen::MetricsHistory => render_metrics_history(frame, app, chunks[1]),
         Screen::Reports => render_reports(frame, app, chunks[1]),
         Screen::PickExercise => render_pick_exercise(frame, app, chunks[1]),
+        Screen::RecipeList => render_recipe_list(frame, app, chunks[1]),
+        Screen::RecipeDetail => render_recipe_detail(frame, app, chunks[1]),
+        Screen::PickIngredient => render_pick_ingredient(frame, app, chunks[1]),
+        Screen::IngredientLibrary => render_ingredient_library(frame, app, chunks[1]),
+        Screen::MealHistory => render_meal_history(frame, app, chunks[1]),
+        Screen::Recipebook => render_recipebook(frame, app, chunks[1]),
     }
 
     render_footer(frame, app, chunks[2]);
@@ -55,17 +68,27 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 /// @param area Rectangle allotted to the header.
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let title = match app.screen {
-        Screen::Dashboard => " Workout Buddy  —  Dashboard ",
-        Screen::WorkoutList => " Workout Buddy  —  Workouts ",
-        Screen::WorkoutDetail => " Workout Buddy  —  Workout Detail ",
-        Screen::AddWorkout => " Workout Buddy  —  New Workout ",
-        Screen::AddExercise => " Workout Buddy  —  Add Exercise ",
-        Screen::ExerciseTypeSelect => " Workout Buddy  —  Exercise Type ",
-        Screen::LogMetrics => " Workout Buddy  —  Log Metrics ",
-        Screen::MetricsHistory => " Workout Buddy  —  Metrics History ",
-        Screen::Reports => " Workout Buddy  —  Reports ",
-        Screen::PickExercise => " Workout Buddy  —  Select Exercise ",
-        Screen::AddToLibrary => " Workout Buddy  —  Add to Library ",
+        Screen::Dashboard => " Rustic Buddy  —  Dashboard ",
+        Screen::WorkoutList => " Rustic Buddy  —  Workouts ",
+        Screen::WorkoutDetail => " Rustic Buddy  —  Workout Detail ",
+        Screen::AddWorkout => " Rustic Buddy  —  New Workout ",
+        Screen::AddExercise => " Rustic Buddy  —  Add Exercise ",
+        Screen::ExerciseTypeSelect => " Rustic Buddy  —  Exercise Type ",
+        Screen::LogMetrics => " Rustic Buddy  —  Log Metrics ",
+        Screen::MetricsHistory => " Rustic Buddy  —  Metrics History ",
+        Screen::Reports => " Rustic Buddy  —  Reports ",
+        Screen::PickExercise => " Rustic Buddy  —  Select Exercise ",
+        Screen::AddToLibrary => " Rustic Buddy  —  Add to Library ",
+        Screen::RecipeList => " Rustic Buddy  —  Recipes ",
+        Screen::RecipeDetail => " Rustic Buddy  —  Recipe Detail ",
+        Screen::AddRecipe => " Rustic Buddy  —  New Recipe ",
+        Screen::PickIngredient => " Rustic Buddy  —  Select Ingredient ",
+        Screen::AddRecipeIngredient => " Rustic Buddy  —  Ingredient Amount ",
+        Screen::IngredientLibrary => " Rustic Buddy  —  Ingredients ",
+        Screen::AddIngredient => " Rustic Buddy  —  Add Ingredient ",
+        Screen::SetIngredientStock => " Rustic Buddy  —  Set Stock ",
+        Screen::MealHistory => " Rustic Buddy  —  Meal Log ",
+        Screen::Recipebook => " Rustic Buddy  —  Recipebook ",
     };
     let para = Paragraph::new(title)
         .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)))
@@ -79,16 +102,29 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
 /// @param area Rectangle allotted to the footer.
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.screen {
-        Screen::Dashboard => "[1/w] Workouts  [2/m] Log Metrics  [3/h] History  [4/r] Reports  [q] Quit",
-        Screen::WorkoutList => "[↑↓] Navigate  [Enter] Open  [a] Set Active  [n] New  [d] Delete  [Esc/q] Back",
-        Screen::WorkoutDetail => "[↑↓] Navigate  [n] Add  [l] Log session  [d] Delete  [Esc/q] Back",
-        Screen::AddWorkout | Screen::AddExercise | Screen::LogMetrics | Screen::AddToLibrary => {
+        Screen::Dashboard => "[↑↓] Navigate  [Enter/→] Open  [1-5] Jump  [q] Quit",
+        Screen::Recipebook => "[↑↓] Navigate  [Enter/→] Open  [1-3] Jump  [←/Esc/q] Back",
+        Screen::WorkoutList => "[↑↓] Navigate  [Enter/→] Open  [a] Set Active  [n] New  [d] Delete  [←/Esc/q] Back",
+        Screen::WorkoutDetail => "[↑↓] Navigate  [n] Add  [l] Log session  [d] Delete  [←/Esc/q] Back",
+        Screen::AddWorkout
+        | Screen::AddExercise
+        | Screen::LogMetrics
+        | Screen::AddToLibrary
+        | Screen::AddRecipe
+        | Screen::AddRecipeIngredient
+        | Screen::AddIngredient
+        | Screen::SetIngredientStock => {
             "[Tab/Enter] Next Field  [Shift+Tab] Prev  [Enter] Submit on last field  [Esc] Cancel"
         }
-        Screen::ExerciseTypeSelect => "[↑↓] Navigate  [Enter] Select  [Esc/q] Back",
-        Screen::PickExercise => "[↑↓] Navigate  [Enter] Select  [n] Add to library  [Esc/q] Back",
-        Screen::MetricsHistory => "[↑↓] Navigate  [d] Delete  [Esc/q] Back",
-        Screen::Reports => "[Esc/q] Back",
+        Screen::ExerciseTypeSelect => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
+        Screen::PickExercise => "[↑↓] Navigate  [Enter/→] Select  [n] Add to library  [←/Esc/q] Back",
+        Screen::MetricsHistory => "[↑↓] Navigate  [d] Delete  [←/Esc/q] Back",
+        Screen::Reports => "[←/Esc/q] Back",
+        Screen::RecipeList => "[↑↓] Navigate  [Enter/→] Open  [n] New  [d] Delete  [←/Esc/q] Back",
+        Screen::RecipeDetail => "[↑↓] Navigate  [n] Add Ingredient  [l] Log Meal  [d] Remove Ingredient  [←/Esc/q] Back",
+        Screen::PickIngredient => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
+        Screen::IngredientLibrary => "[↑↓] Navigate  [n] New  [s] Set Stock  [d] Delete  [←/Esc/q] Back",
+        Screen::MealHistory => "[↑↓] Navigate  [d] Delete  [←/Esc/q] Back",
     };
     let para = Paragraph::new(hints)
         .block(Block::default().borders(Borders::ALL))
@@ -96,17 +132,29 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// @brief Draws the two-pane dashboard: active workout plan on the left, latest personal metrics on the right.
+/// @brief Draws the dashboard: the main menu on the left, active workout plan in the middle, latest personal metrics on the right.
 /// @param frame Frame to draw into.
-/// @param app Current application state.
+/// @param app Current application state; `dashboard_list_state` tracks selection/scroll.
 /// @param area Rectangle allotted to the dashboard body.
-fn render_dashboard(frame: &mut Frame, app: &App, area: Rect) {
-    let halves = Layout::default()
+fn render_dashboard(frame: &mut Frame, app: &mut App, area: Rect) {
+    let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Percentage(22), Constraint::Percentage(39), Constraint::Percentage(39)])
         .split(area);
 
-    // Left — active workout
+    let menu_items: Vec<ListItem> = ["Workouts", "Log Metrics", "History", "Reports", "Recipebook"]
+        .iter()
+        .map(|label| ListItem::new(format!("  {label}")))
+        .collect();
+    let menu = List::new(menu_items)
+        .block(Block::default().borders(Borders::ALL).title(" Menu "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+    frame.render_stateful_widget(menu, columns[0], &mut app.dashboard_list_state);
+
+    let halves = [columns[1], columns[2]];
+
+    // Middle — active workout
     let workout_lines = if let Some(plan) = app.active_plan() {
         let mut lines = vec![
             Line::from(vec![
@@ -215,6 +263,24 @@ fn render_dashboard(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(metric_lines).block(metrics_block).wrap(Wrap { trim: false }),
         halves[1],
     );
+}
+
+/// @brief Draws the Recipebook submenu: Recipes, Ingredients, and Meal Log.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `recipebook_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the menu.
+fn render_recipebook(frame: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = ["Recipes", "Ingredients", "Meal Log"]
+        .iter()
+        .map(|label| ListItem::new(format!("  {label}")))
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Recipebook "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, area, &mut app.recipebook_list_state);
 }
 
 /// @brief Draws the list of workout plans, marking the active one with a star.
@@ -785,4 +851,202 @@ fn render_metrics_history(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_symbol("▶ ");
 
     frame.render_stateful_widget(list, area, &mut app.metrics_list_state);
+}
+
+/// @brief Draws the list of recipes, showing each one's category.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `recipe_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the list.
+fn render_recipe_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .recipes
+        .iter()
+        .map(|r| ListItem::new(format!("  {}  ({})", r.name, r.category)))
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Recipes "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, area, &mut app.recipe_list_state);
+}
+
+/// @brief Draws a single recipe's metadata/instructions alongside its attached ingredients.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `recipe_ingredient_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the recipe-detail body.
+fn render_recipe_detail(frame: &mut Frame, app: &mut App, area: Rect) {
+    let recipe = app
+        .detail_recipe_id
+        .and_then(|id| app.recipes.iter().find(|r| r.id == id));
+
+    let halves = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+
+    let meta_lines = if let Some(recipe) = recipe {
+        let mut lines = vec![
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    recipe.name.as_str(),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(Span::styled(format!("  {}", recipe.category), Style::default().fg(Color::DarkGray))),
+            Line::raw(""),
+        ];
+        if recipe.prep_min > 0 || recipe.cook_min > 0 || recipe.cook_temp > 0 {
+            if recipe.prep_min > 0 {
+                lines.push(Line::raw(format!("  Prep: {} min", recipe.prep_min)));
+            }
+            if recipe.cook_min > 0 {
+                lines.push(Line::raw(format!("  Cook: {} min", recipe.cook_min)));
+            }
+            if recipe.cook_temp > 0 {
+                lines.push(Line::raw(format!("  Temp: {}°", recipe.cook_temp)));
+            }
+            lines.push(Line::raw(""));
+        }
+        if recipe.instructions.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No instructions yet.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled("  Instructions:", Style::default().add_modifier(Modifier::BOLD))));
+            lines.push(Line::raw(format!("  {}", recipe.instructions)));
+        }
+        lines
+    } else {
+        vec![Line::raw(""), Line::from(Span::styled("  Recipe not found.", Style::default().fg(Color::DarkGray)))]
+    };
+
+    let meta_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Details ")
+        .border_style(Style::default().fg(Color::Green));
+    frame.render_widget(
+        Paragraph::new(meta_lines).block(meta_block).wrap(Wrap { trim: false }),
+        halves[0],
+    );
+
+    let mut items: Vec<ListItem> = app
+        .current_recipe_ingredients
+        .iter()
+        .map(|ri| {
+            let qty = match (ri.amount, ri.unit.is_empty()) {
+                (Some(a), true) => format!("{a} "),
+                (Some(a), false) => format!("{a} {} ", ri.unit),
+                (None, true) => String::new(),
+                (None, false) => format!("{} ", ri.unit),
+            };
+            ListItem::new(format!("  {}{}", qty, ri.name))
+        })
+        .collect();
+    if items.is_empty() {
+        items.push(ListItem::new(Span::styled(
+            "  No ingredients yet — press [n] to attach one",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Ingredients "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, halves[1], &mut app.recipe_ingredient_list_state);
+}
+
+/// @brief Draws the ingredient-library picker, appending a "Custom ingredient..." entry after the library items.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `ingredient_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the picker.
+fn render_pick_ingredient(frame: &mut Frame, app: &mut App, area: Rect) {
+    let mut items: Vec<ListItem> = app
+        .ingredients
+        .iter()
+        .map(|i| ListItem::new(format!("  {}  ({})  —  {}", i.name, i.category, stock_label(i))))
+        .collect();
+
+    if items.is_empty() {
+        items.push(ListItem::new(Span::styled(
+            "  Library is empty — press [Enter] to add your first ingredient",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    items.push(ListItem::new(Span::styled(
+        "  [ Custom ingredient... ]",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Ingredient Library "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, area, &mut app.ingredient_list_state);
+}
+
+/// @brief Draws the full ingredient library as a browsable, alphabetical list.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `ingredient_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the list.
+fn render_ingredient_library(frame: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .ingredients
+        .iter()
+        .map(|i| ListItem::new(format!("  {}  ({})  —  {}", i.name, i.category, stock_label(i))))
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Ingredient Library "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, area, &mut app.ingredient_list_state);
+}
+
+/// @brief Formats an ingredient's on-hand stock for display, or a placeholder if untracked.
+/// @param ingredient The ingredient whose `stock_amount`/`stock_unit` to format.
+/// @return e.g. `"2 lb on hand"`, or `"not tracked"` if `stock_amount` is `None`.
+fn stock_label(ingredient: &Ingredient) -> String {
+    match ingredient.stock_amount {
+        Some(amount) if ingredient.stock_unit.is_empty() => format!("{amount} on hand"),
+        Some(amount) => format!("{amount} {} on hand", ingredient.stock_unit),
+        None => "not tracked".to_string(),
+    }
+}
+
+/// @brief Draws the full meal history as a scrollable, newest-first list.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `meal_log_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the list.
+fn render_meal_history(frame: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .meal_log
+        .iter()
+        .map(|m| {
+            let date = m.logged_at.get(..16).unwrap_or(&m.logged_at);
+            ListItem::new(format!(
+                "  {}   {}  ({})  ×{}",
+                date, m.meal_name, m.category, m.servings
+            ))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Meal Log (newest first) "),
+        )
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, area, &mut app.meal_log_list_state);
 }

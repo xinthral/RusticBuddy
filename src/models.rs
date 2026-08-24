@@ -119,3 +119,143 @@ pub struct PersonalMetric {
     /// @brief Diastolic blood pressure in mmHg, if recorded.
     pub bp_diastolic: Option<i32>,
 }
+
+/// @brief Declarative macro that generates a category enum plus `Display` and case-insensitive
+/// `FromStr` (falling back to `Pending`).
+///
+/// Shared by ::IngredientType and ::RecipeType, which both need a large, open-ended set of
+/// string-backed categories.
+macro_rules! category_enum {
+    ($enum_name:ident { $($variant:ident => $name:expr),+ $(,)? }) => {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum $enum_name {
+            $($variant),+
+        }
+
+        impl $enum_name {
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $($enum_name::$variant => $name),+
+                }
+            }
+        }
+
+        impl std::fmt::Display for $enum_name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.as_str())
+            }
+        }
+
+        impl std::str::FromStr for $enum_name {
+            type Err = ();
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                $(if s.eq_ignore_ascii_case($name) { return Ok($enum_name::$variant); })+
+                Ok($enum_name::Pending)
+            }
+        }
+    };
+}
+
+category_enum!(IngredientType {
+    Condiment => "Condiment",
+    Craft     => "Craft",
+    Culinary  => "Culinary",
+    Dairy     => "Dairy",
+    Fat       => "Fat",
+    Fish      => "Fish",
+    Fruit     => "Fruit",
+    Herb      => "Herb",
+    Grain     => "Grain",
+    Meat      => "Meat",
+    Nuts      => "Nuts",
+    Seasoning => "Seasoning",
+    Sweetener => "Sweetener",
+    Vegetable => "Vegetable",
+    Pending   => "Pending",
+});
+
+category_enum!(RecipeType {
+    Baked    => "Baked",
+    Boiled   => "Boiled",
+    Brewed   => "Brewed",
+    Crafted  => "Crafted",
+    Fried    => "Fried",
+    Grilled  => "Grilled",
+    Mixed    => "Mixed",
+    Roasted  => "Roasted",
+    Sauteed  => "Sauteed",
+    Steamed  => "Steamed",
+    Simmered => "Simmered",
+    Pending  => "Pending",
+});
+
+/// @brief A single cookbook ingredient with a name and category.
+#[derive(Debug, Clone)]
+pub struct Ingredient {
+    /// @brief Primary key in the `ingredients` table.
+    pub id: i64,
+    /// @brief Ingredient name (e.g. "Chicken").
+    pub name: String,
+    /// @brief Classification (e.g. Meat, Dairy, Pending).
+    pub category: IngredientType,
+    /// @brief Quantity currently on hand, if the pantry stock is being tracked.
+    pub stock_amount: Option<f64>,
+    /// @brief Unit of measure for `stock_amount` (e.g. "lb", "cups").
+    pub stock_unit: String,
+}
+
+/// @brief A cookbook recipe's metadata and instructions.
+///
+/// The recipe's ingredients live separately in the `recipe_ingredients` join
+/// table (see ::RecipeIngredient) rather than embedded here.
+#[derive(Debug, Clone)]
+pub struct Recipe {
+    /// @brief Primary key in the `recipes` table.
+    pub id: i64,
+    /// @brief Recipe name.
+    pub name: String,
+    /// @brief Cooking-method classification.
+    pub category: RecipeType,
+    /// @brief Preparation time in minutes.
+    pub prep_min: i32,
+    /// @brief Cooking time in minutes.
+    pub cook_min: i32,
+    /// @brief Cooking temperature in degrees.
+    pub cook_temp: i32,
+    /// @brief Step-by-step cooking instructions.
+    pub instructions: String,
+}
+
+/// @brief One ingredient attached to a recipe, joined with the ingredient's name for display.
+#[derive(Debug, Clone)]
+pub struct RecipeIngredient {
+    /// @brief Primary key in the `recipe_ingredients` table.
+    pub id: i64,
+    /// @brief Foreign key into `ingredients`.
+    pub ingredient_id: i64,
+    /// @brief Denormalized ingredient name, joined in at query time.
+    pub name: String,
+    /// @brief Quantity of the ingredient required, if specified.
+    pub amount: Option<f64>,
+    /// @brief Unit of measure for `amount` (e.g. "cups", "g").
+    pub unit: String,
+}
+
+/// @brief A historical record of one eaten meal.
+///
+/// Denormalized like ::ExerciseLogEntry: `meal_name`/`category` are copied by
+/// value so history survives edits or deletion of the originating ::Recipe.
+#[derive(Debug, Clone)]
+pub struct MealLogEntry {
+    /// @brief Primary key in the `meal_log` table.
+    pub id: i64,
+    /// @brief Name of the recipe (or ad-hoc meal) eaten.
+    pub meal_name: String,
+    /// @brief Cooking-method classification at the time it was logged.
+    pub category: RecipeType,
+    /// @brief Number of servings eaten.
+    pub servings: f64,
+    /// @brief Timestamp the meal was logged, as stored by SQLite (`datetime('now')`).
+    pub logged_at: String,
+}

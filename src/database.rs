@@ -5,18 +5,21 @@
 
 use rusqlite::{params, Connection, Result};
 
-use crate::models::{Exercise, ExerciseLogEntry, ExerciseType, PersonalMetric, WorkoutPlan};
+use crate::models::{
+    Exercise, ExerciseLogEntry, ExerciseType, Ingredient, IngredientType, MealLogEntry,
+    PersonalMetric, Recipe, RecipeIngredient, RecipeType, WorkoutPlan,
+};
 
 /// @brief Opens (creating if necessary) the on-disk SQLite database and brings it up to date.
 ///
-/// Opens `workoutbuddy.db` in the current working directory, enables
+/// Opens `rusticbuddy.db` in the current working directory, enables
 /// foreign-key enforcement, creates any missing tables via ::init_schema,
 /// and applies any pending column additions via ::run_migrations.
 ///
 /// @return An open ::Connection ready for use, or an `rusqlite` error if the
 ///         file cannot be opened or the schema statements fail.
 pub fn open() -> Result<Connection> {
-    let conn = Connection::open("workoutbuddy.db")?;
+    let conn = Connection::open("rusticbuddy.db")?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     init_schema(&conn)?;
     run_migrations(&conn)?;
@@ -66,6 +69,34 @@ fn init_schema(conn: &Connection) -> Result<()> {
             heart_rate   INTEGER,
             bp_systolic  INTEGER,
             bp_diastolic INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS ingredients (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            name     TEXT    NOT NULL UNIQUE,
+            category TEXT    NOT NULL DEFAULT 'Pending'
+        );
+        CREATE TABLE IF NOT EXISTS recipes (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT    NOT NULL,
+            category     TEXT    NOT NULL DEFAULT 'Pending',
+            prep_min     INTEGER NOT NULL DEFAULT 0,
+            cook_min     INTEGER NOT NULL DEFAULT 0,
+            cook_temp    INTEGER NOT NULL DEFAULT 0,
+            instructions TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS recipe_ingredients (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipe_id     INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+            ingredient_id INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+            amount        REAL,
+            unit          TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS meal_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            meal_name  TEXT    NOT NULL,
+            category   TEXT    NOT NULL DEFAULT 'Pending',
+            servings   REAL    NOT NULL DEFAULT 1,
+            logged_at  TEXT    NOT NULL DEFAULT (datetime('now'))
         );",
     )
 }
@@ -87,6 +118,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE exercise_log ADD COLUMN exercise_type TEXT NOT NULL DEFAULT 'strength';");
     let _ = conn.execute_batch("ALTER TABLE exercise_log ADD COLUMN duration_min REAL;");
     let _ = conn.execute_batch("ALTER TABLE exercise_log ADD COLUMN distance_km REAL;");
+    let _ = conn.execute_batch("ALTER TABLE ingredients ADD COLUMN stock_amount REAL;");
+    let _ = conn.execute_batch("ALTER TABLE ingredients ADD COLUMN stock_unit TEXT NOT NULL DEFAULT '';");
     Ok(())
 }
 
@@ -350,4 +383,225 @@ pub fn get_metrics(conn: &Connection, limit: i64) -> Result<Vec<PersonalMetric>>
         })
     })?
     .collect()
+}
+
+// --- Ingredients ---
+
+/// @brief Fetches all ingredients in the library, alphabetically by name.
+/// @param conn Open database connection.
+/// @return All rows of `ingredients`; unrecognized `category` values fall back to Pending.
+pub fn get_ingredients(conn: &Connection) -> Result<Vec<Ingredient>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, category, stock_amount, stock_unit FROM ingredients ORDER BY name",
+    )?;
+    stmt.query_map([], |row| {
+        let category_str: String = row.get(2)?;
+        Ok(Ingredient {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            category: category_str.parse().unwrap_or(IngredientType::Pending),
+            stock_amount: row.get(3)?,
+            stock_unit: row.get(4)?,
+        })
+    })?
+    .collect()
+}
+
+/// @brief Sets an ingredient's on-hand stock quantity and unit.
+/// @param conn Open database connection.
+/// @param id Primary key of the ingredient to update.
+/// @param amount Quantity on hand, or `None` if no longer tracked.
+/// @param unit Unit of measure for `amount`.
+/// @return `Ok(())` on success.
+pub fn set_ingredient_stock(conn: &Connection, id: i64, amount: Option<f64>, unit: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE ingredients SET stock_amount = ?1, stock_unit = ?2 WHERE id = ?3",
+        params![amount, unit, id],
+    )?;
+    Ok(())
+}
+
+/// @brief Inserts a new ingredient into the library.
+/// @param conn Open database connection.
+/// @param name Ingredient name; must be unique (`ingredients.name` is `UNIQUE`).
+/// @param category Classification for the new ingredient.
+/// @return `Ok(())` on success, or an `rusqlite` error if the name already exists.
+pub fn create_ingredient(conn: &Connection, name: &str, category: &IngredientType) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ingredients (name, category) VALUES (?1, ?2)",
+        params![name, category.as_str()],
+    )?;
+    Ok(())
+}
+
+/// @brief Deletes an ingredient from the library (and, via cascade, any recipe links to it).
+/// @param conn Open database connection.
+/// @param id Primary key of the ingredient to delete.
+/// @return `Ok(())` on success.
+pub fn delete_ingredient(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM ingredients WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+// --- Recipes ---
+
+/// @brief Fetches all recipes, alphabetically by name.
+/// @param conn Open database connection.
+/// @return All rows of `recipes`; unrecognized `category` values fall back to Pending.
+pub fn get_recipes(conn: &Connection) -> Result<Vec<Recipe>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, category, prep_min, cook_min, cook_temp, instructions
+         FROM recipes ORDER BY name",
+    )?;
+    stmt.query_map([], |row| {
+        let category_str: String = row.get(2)?;
+        Ok(Recipe {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            category: category_str.parse().unwrap_or(RecipeType::Pending),
+            prep_min: row.get(3)?,
+            cook_min: row.get(4)?,
+            cook_temp: row.get(5)?,
+            instructions: row.get(6)?,
+        })
+    })?
+    .collect()
+}
+
+/// @brief Inserts a new recipe.
+/// @param conn Open database connection.
+/// @param name Recipe name.
+/// @param category Cooking-method classification.
+/// @param prep_min Preparation time in minutes.
+/// @param cook_min Cooking time in minutes.
+/// @param cook_temp Cooking temperature in degrees.
+/// @param instructions Step-by-step cooking instructions.
+/// @return The `id` of the newly inserted recipe.
+pub fn create_recipe(
+    conn: &Connection,
+    name: &str,
+    category: &RecipeType,
+    prep_min: i32,
+    cook_min: i32,
+    cook_temp: i32,
+    instructions: &str,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO recipes (name, category, prep_min, cook_min, cook_temp, instructions)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![name, category.as_str(), prep_min, cook_min, cook_temp, instructions],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// @brief Deletes a recipe and (via `ON DELETE CASCADE`) its ingredient links.
+/// @param conn Open database connection.
+/// @param id Primary key of the recipe to delete.
+/// @return `Ok(())` on success.
+pub fn delete_recipe(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM recipes WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// @brief Fetches all ingredients attached to a recipe, joined with each ingredient's name.
+/// @param conn Open database connection.
+/// @param recipe_id Primary key of the owning ::Recipe.
+/// @return Ingredient links for that recipe, in insertion order.
+pub fn get_recipe_ingredients(conn: &Connection, recipe_id: i64) -> Result<Vec<RecipeIngredient>> {
+    let mut stmt = conn.prepare(
+        "SELECT ri.id, ri.ingredient_id, i.name, ri.amount, ri.unit
+         FROM recipe_ingredients ri
+         JOIN ingredients i ON i.id = ri.ingredient_id
+         WHERE ri.recipe_id = ?1 ORDER BY ri.id",
+    )?;
+    stmt.query_map(params![recipe_id], |row| {
+        Ok(RecipeIngredient {
+            id: row.get(0)?,
+            ingredient_id: row.get(1)?,
+            name: row.get(2)?,
+            amount: row.get(3)?,
+            unit: row.get(4)?,
+        })
+    })?
+    .collect()
+}
+
+/// @brief Attaches an existing library ingredient to a recipe.
+/// @param conn Open database connection.
+/// @param recipe_id Primary key of the owning ::Recipe.
+/// @param ingredient_id Primary key of the ::Ingredient to attach.
+/// @param amount Quantity required, if specified.
+/// @param unit Unit of measure for `amount`.
+/// @return `Ok(())` on success.
+pub fn add_recipe_ingredient(
+    conn: &Connection,
+    recipe_id: i64,
+    ingredient_id: i64,
+    amount: Option<f64>,
+    unit: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?1, ?2, ?3, ?4)",
+        params![recipe_id, ingredient_id, amount, unit],
+    )?;
+    Ok(())
+}
+
+/// @brief Detaches a single ingredient link from a recipe.
+/// @param conn Open database connection.
+/// @param id Primary key of the `recipe_ingredients` row to delete.
+/// @return `Ok(())` on success.
+pub fn remove_recipe_ingredient(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM recipe_ingredients WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+// --- Meal Log ---
+
+/// @brief Records a meal as eaten in the history log.
+///
+/// Writes a denormalized snapshot into `meal_log` (name and category are
+/// copied by value) so history remains intact even if the source ::Recipe
+/// is later edited or deleted.
+///
+/// @param conn Open database connection.
+/// @param meal_name Name of the recipe (or ad-hoc meal) eaten.
+/// @param category Cooking-method classification at the time it was eaten.
+/// @param servings Number of servings eaten.
+/// @return `Ok(())` on success.
+pub fn log_meal(conn: &Connection, meal_name: &str, category: &RecipeType, servings: f64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meal_log (meal_name, category, servings) VALUES (?1, ?2, ?3)",
+        params![meal_name, category.as_str(), servings],
+    )?;
+    Ok(())
+}
+
+/// @brief Fetches the full meal history, newest first.
+/// @param conn Open database connection.
+/// @return All rows of `meal_log`, ordered by `logged_at DESC`.
+pub fn get_meal_log(conn: &Connection) -> Result<Vec<MealLogEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, meal_name, category, servings, logged_at FROM meal_log ORDER BY logged_at DESC",
+    )?;
+    stmt.query_map([], |row| {
+        let category_str: String = row.get(2)?;
+        Ok(MealLogEntry {
+            id: row.get(0)?,
+            meal_name: row.get(1)?,
+            category: category_str.parse().unwrap_or(RecipeType::Pending),
+            servings: row.get(3)?,
+            logged_at: row.get(4)?,
+        })
+    })?
+    .collect()
+}
+
+/// @brief Deletes a single meal-log entry.
+/// @param conn Open database connection.
+/// @param id Primary key of the entry to delete.
+/// @return `Ok(())` on success.
+pub fn delete_meal_log_entry(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM meal_log WHERE id = ?1", params![id])?;
+    Ok(())
 }

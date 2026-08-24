@@ -12,7 +12,10 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
-use crate::{database, models::{Exercise, ExerciseLogEntry, ExerciseType, PersonalMetric, WorkoutPlan}};
+use crate::{database, models::{
+    Exercise, ExerciseLogEntry, ExerciseType, Ingredient, IngredientType, MealLogEntry,
+    PersonalMetric, Recipe, RecipeIngredient, RecipeType, WorkoutPlan,
+}};
 
 /// @brief Identifies which screen of the TUI is currently displayed.
 ///
@@ -31,6 +34,17 @@ pub enum Screen {
     Reports,
     PickExercise,
     AddToLibrary,
+
+    RecipeList,
+    RecipeDetail,
+    AddRecipe,
+    PickIngredient,
+    AddRecipeIngredient,
+    IngredientLibrary,
+    AddIngredient,
+    SetIngredientStock,
+    MealHistory,
+    Recipebook,
 }
 
 /// @brief All mutable state for the running TUI: current screen, DB handle, cached query results, and form state.
@@ -38,6 +52,10 @@ pub struct App {
     pub screen: Screen,
     pub db: Connection,
     pub should_quit: bool,
+
+    // Top-level menus
+    pub dashboard_list_state: ListState,
+    pub recipebook_list_state: ListState,
 
     // Workout list
     pub workout_plans: Vec<WorkoutPlan>,
@@ -76,6 +94,24 @@ pub struct App {
     pub input_index: usize,
     pub input_mode: bool,
     pub status_msg: Option<String>,
+
+    // Cookbook: recipes
+    pub recipes: Vec<Recipe>,
+    pub recipe_list_state: ListState,
+    pub detail_recipe_id: Option<i64>,
+    pub current_recipe_ingredients: Vec<RecipeIngredient>,
+    pub recipe_ingredient_list_state: ListState,
+
+    // Cookbook: ingredient library (shared by IngredientLibrary and PickIngredient)
+    pub ingredients: Vec<Ingredient>,
+    pub ingredient_list_state: ListState,
+    pub pending_ingredient_id: Option<i64>,
+    pub adding_ingredient_for_recipe: bool,
+    pub editing_ingredient_id: Option<i64>,
+
+    // Cookbook: meal log
+    pub meal_log: Vec<MealLogEntry>,
+    pub meal_log_list_state: ListState,
 }
 
 impl App {
@@ -87,6 +123,16 @@ impl App {
             screen: Screen::Dashboard,
             db,
             should_quit: false,
+            dashboard_list_state: {
+                let mut s = ListState::default();
+                s.select(Some(0));
+                s
+            },
+            recipebook_list_state: {
+                let mut s = ListState::default();
+                s.select(Some(0));
+                s
+            },
             workout_plans: vec![],
             workout_list_state: ListState::default(),
             active_exercises: vec![],
@@ -107,11 +153,26 @@ impl App {
             input_index: 0,
             input_mode: false,
             status_msg: None,
+            recipes: vec![],
+            recipe_list_state: ListState::default(),
+            detail_recipe_id: None,
+            current_recipe_ingredients: vec![],
+            recipe_ingredient_list_state: ListState::default(),
+            ingredients: vec![],
+            ingredient_list_state: ListState::default(),
+            pending_ingredient_id: None,
+            adding_ingredient_for_recipe: false,
+            editing_ingredient_id: None,
+            meal_log: vec![],
+            meal_log_list_state: ListState::default(),
         };
         app.refresh_plans();
         app.refresh_metrics();
         app.refresh_library();
         app.refresh_exercise_logs();
+        app.refresh_recipes();
+        app.refresh_ingredients();
+        app.refresh_meal_log();
         app
     }
 
@@ -153,6 +214,31 @@ impl App {
     /// @brief Reloads the 30 most recent personal-metrics readings.
     pub fn refresh_metrics(&mut self) {
         self.metrics = database::get_metrics(&self.db, 30).unwrap_or_default();
+    }
+
+    /// @brief Reloads the full recipe list from the database.
+    pub fn refresh_recipes(&mut self) {
+        self.recipes = database::get_recipes(&self.db).unwrap_or_default();
+    }
+
+    /// @brief Reloads the ingredient list for whichever recipe is open in the recipe-detail screen (::App::detail_recipe_id).
+    ///
+    /// No-op if `detail_recipe_id` is `None`.
+    pub fn refresh_current_recipe_ingredients(&mut self) {
+        if let Some(id) = self.detail_recipe_id {
+            self.current_recipe_ingredients =
+                database::get_recipe_ingredients(&self.db, id).unwrap_or_default();
+        }
+    }
+
+    /// @brief Reloads the ingredient library from the database.
+    pub fn refresh_ingredients(&mut self) {
+        self.ingredients = database::get_ingredients(&self.db).unwrap_or_default();
+    }
+
+    /// @brief Reloads the full meal history from the database.
+    pub fn refresh_meal_log(&mut self) {
+        self.meal_log = database::get_meal_log(&self.db).unwrap_or_default();
     }
 
     /// @brief Returns the currently active workout plan, if any.
@@ -237,27 +323,138 @@ impl App {
             Screen::Reports => self.handle_reports_key(code),
             Screen::PickExercise => self.handle_pick_exercise_key(code),
             Screen::ExerciseTypeSelect => self.handle_type_select_key(code),
+            Screen::RecipeList => self.handle_recipe_list_key(code),
+            Screen::RecipeDetail => self.handle_recipe_detail_key(code),
+            Screen::PickIngredient => self.handle_pick_ingredient_key(code),
+            Screen::IngredientLibrary => self.handle_ingredient_library_key(code),
+            Screen::MealHistory => self.handle_meal_history_key(code),
+            Screen::Recipebook => self.handle_recipebook_key(code),
             _ => {}
         }
     }
 
-    /// @brief Handles key presses on ::Screen::Dashboard: quit, and navigation to the other top-level screens.
+    /// @brief Number of selectable entries in the ::Screen::Dashboard menu (see ::App::activate_dashboard_item).
+    const DASHBOARD_MENU_LEN: usize = 5;
+
+    /// @brief Handles key presses on ::Screen::Dashboard: quit, arrow/Enter navigation of the main menu, and its number/letter shortcuts.
     /// @param code The key that was pressed.
     fn handle_dashboard_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Up => {
+                let i = self.dashboard_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.dashboard_list_state.select(Some(i - 1));
+                }
+            }
+            KeyCode::Down => {
+                let i = self.dashboard_list_state.selected().unwrap_or(0);
+                if i + 1 < Self::DASHBOARD_MENU_LEN {
+                    self.dashboard_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Enter | KeyCode::Right => self.activate_dashboard_item(),
             KeyCode::Char('1') | KeyCode::Char('w') => {
+                self.dashboard_list_state.select(Some(0));
+                self.activate_dashboard_item();
+            }
+            KeyCode::Char('2') | KeyCode::Char('m') => {
+                self.dashboard_list_state.select(Some(1));
+                self.activate_dashboard_item();
+            }
+            KeyCode::Char('3') | KeyCode::Char('h') => {
+                self.dashboard_list_state.select(Some(2));
+                self.activate_dashboard_item();
+            }
+            KeyCode::Char('4') | KeyCode::Char('r') => {
+                self.dashboard_list_state.select(Some(3));
+                self.activate_dashboard_item();
+            }
+            KeyCode::Char('5') | KeyCode::Char('c') => {
+                self.dashboard_list_state.select(Some(4));
+                self.activate_dashboard_item();
+            }
+            _ => {}
+        }
+    }
+
+    /// @brief Opens whichever top-level screen is selected in the ::Screen::Dashboard menu (::App::dashboard_list_state).
+    fn activate_dashboard_item(&mut self) {
+        match self.dashboard_list_state.selected().unwrap_or(0) {
+            0 => {
                 if self.workout_list_state.selected().is_none() && !self.workout_plans.is_empty() {
                     self.workout_list_state.select(Some(0));
                 }
                 self.screen = Screen::WorkoutList;
             }
-            KeyCode::Char('2') | KeyCode::Char('m') => self.open_log_metrics(),
-            KeyCode::Char('3') | KeyCode::Char('h') => {
-                self.screen = Screen::MetricsHistory;
+            1 => self.open_log_metrics(),
+            2 => self.screen = Screen::MetricsHistory,
+            3 => self.screen = Screen::Reports,
+            4 => self.screen = Screen::Recipebook,
+            _ => {}
+        }
+    }
+
+    /// @brief Number of selectable entries in the ::Screen::Recipebook menu (see ::App::activate_recipebook_item).
+    const RECIPEBOOK_MENU_LEN: usize = 3;
+
+    /// @brief Handles key presses on ::Screen::Recipebook: back to the dashboard, arrow/Enter navigation, and its number/letter shortcuts.
+    /// @param code The key that was pressed.
+    fn handle_recipebook_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Dashboard,
+            KeyCode::Up => {
+                let i = self.recipebook_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.recipebook_list_state.select(Some(i - 1));
+                }
             }
-            KeyCode::Char('4') | KeyCode::Char('r') => {
-                self.screen = Screen::Reports;
+            KeyCode::Down => {
+                let i = self.recipebook_list_state.selected().unwrap_or(0);
+                if i + 1 < Self::RECIPEBOOK_MENU_LEN {
+                    self.recipebook_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Enter | KeyCode::Right => self.activate_recipebook_item(),
+            KeyCode::Char('1') | KeyCode::Char('r') => {
+                self.recipebook_list_state.select(Some(0));
+                self.activate_recipebook_item();
+            }
+            KeyCode::Char('2') | KeyCode::Char('i') => {
+                self.recipebook_list_state.select(Some(1));
+                self.activate_recipebook_item();
+            }
+            KeyCode::Char('3') | KeyCode::Char('l') => {
+                self.recipebook_list_state.select(Some(2));
+                self.activate_recipebook_item();
+            }
+            _ => {}
+        }
+    }
+
+    /// @brief Opens whichever cookbook screen is selected in the ::Screen::Recipebook menu (::App::recipebook_list_state).
+    fn activate_recipebook_item(&mut self) {
+        match self.recipebook_list_state.selected().unwrap_or(0) {
+            0 => {
+                self.refresh_recipes();
+                if self.recipe_list_state.selected().is_none() && !self.recipes.is_empty() {
+                    self.recipe_list_state.select(Some(0));
+                }
+                self.screen = Screen::RecipeList;
+            }
+            1 => {
+                self.refresh_ingredients();
+                if self.ingredient_list_state.selected().is_none() && !self.ingredients.is_empty() {
+                    self.ingredient_list_state.select(Some(0));
+                }
+                self.screen = Screen::IngredientLibrary;
+            }
+            2 => {
+                self.refresh_meal_log();
+                if self.meal_log_list_state.selected().is_none() && !self.meal_log.is_empty() {
+                    self.meal_log_list_state.select(Some(0));
+                }
+                self.screen = Screen::MealHistory;
             }
             _ => {}
         }
@@ -267,7 +464,7 @@ impl App {
     /// @param code The key that was pressed.
     fn handle_workout_list_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::Dashboard,
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Dashboard,
             KeyCode::Up => {
                 let i = self.workout_list_state.selected().unwrap_or(0);
                 if i > 0 {
@@ -281,7 +478,7 @@ impl App {
                     self.workout_list_state.select(Some(i + 1));
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Right => {
                 if let Some(i) = self.workout_list_state.selected() {
                     if let Some(plan) = self.workout_plans.get(i) {
                         self.detail_plan_id = Some(plan.id);
@@ -329,7 +526,7 @@ impl App {
     /// @param code The key that was pressed.
     fn handle_workout_detail_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => {
                 self.screen = Screen::WorkoutList;
             }
             KeyCode::Up => {
@@ -392,7 +589,7 @@ impl App {
     fn handle_pick_exercise_key(&mut self, code: KeyCode) {
         let total = self.library_exercises.len() + 1; // +1 for "Custom"
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => {
                 self.screen = Screen::WorkoutDetail;
             }
             KeyCode::Up => {
@@ -407,7 +604,7 @@ impl App {
                     self.library_list_state.select(Some(i + 1));
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Right => {
                 let i = self.library_list_state.selected().unwrap_or(0);
                 if self.detail_plan_id.is_some() {
                     self.pending_exercise_name = if i < self.library_exercises.len() {
@@ -430,7 +627,7 @@ impl App {
     /// @param code The key that was pressed.
     fn handle_type_select_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => {
                 self.screen = Screen::PickExercise;
             }
             KeyCode::Up => {
@@ -443,7 +640,7 @@ impl App {
                     self.type_select_index += 1;
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Right => {
                 let exercise_type = if self.type_select_index == 0 {
                     ExerciseType::Strength
                 } else {
@@ -462,7 +659,7 @@ impl App {
     /// @param code The key that was pressed.
     fn handle_reports_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::Dashboard,
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Dashboard,
             _ => {}
         }
     }
@@ -471,7 +668,7 @@ impl App {
     /// @param code The key that was pressed.
     fn handle_metrics_history_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::Dashboard,
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Dashboard,
             KeyCode::Up => {
                 let i = self.metrics_list_state.selected().unwrap_or(0);
                 if i > 0 {
@@ -505,6 +702,222 @@ impl App {
         }
     }
 
+    /// @brief Handles key presses on ::Screen::RecipeList: navigate, open, create, and delete recipes.
+    /// @param code The key that was pressed.
+    fn handle_recipe_list_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Recipebook,
+            KeyCode::Up => {
+                let i = self.recipe_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.recipe_list_state.select(Some(i - 1));
+                }
+            }
+            KeyCode::Down => {
+                let len = self.recipes.len();
+                let i = self.recipe_list_state.selected().unwrap_or(0);
+                if i + 1 < len {
+                    self.recipe_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Enter | KeyCode::Right => {
+                if let Some(i) = self.recipe_list_state.selected() {
+                    if let Some(recipe) = self.recipes.get(i) {
+                        self.detail_recipe_id = Some(recipe.id);
+                        self.current_recipe_ingredients = vec![];
+                        self.recipe_ingredient_list_state = ListState::default();
+                        self.refresh_current_recipe_ingredients();
+                        if !self.current_recipe_ingredients.is_empty() {
+                            self.recipe_ingredient_list_state.select(Some(0));
+                        }
+                        self.screen = Screen::RecipeDetail;
+                    }
+                }
+            }
+            KeyCode::Char('n') => self.open_add_recipe(),
+            KeyCode::Char('d') => {
+                if let Some(i) = self.recipe_list_state.selected() {
+                    if let Some(recipe) = self.recipes.get(i) {
+                        let id = recipe.id;
+                        let _ = database::delete_recipe(&self.db, id);
+                        self.refresh_recipes();
+                        let new_i = i.saturating_sub(1);
+                        if self.recipes.is_empty() {
+                            self.recipe_list_state.select(None);
+                        } else {
+                            self.recipe_list_state
+                                .select(Some(new_i.min(self.recipes.len() - 1)));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// @brief Handles key presses on ::Screen::RecipeDetail: navigate attached ingredients, attach, and detach.
+    /// @param code The key that was pressed.
+    fn handle_recipe_detail_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => {
+                self.screen = Screen::RecipeList;
+            }
+            KeyCode::Up => {
+                let i = self.recipe_ingredient_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.recipe_ingredient_list_state.select(Some(i - 1));
+                }
+            }
+            KeyCode::Down => {
+                let len = self.current_recipe_ingredients.len();
+                let i = self.recipe_ingredient_list_state.selected().unwrap_or(0);
+                if i + 1 < len {
+                    self.recipe_ingredient_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Char('n') => {
+                self.open_pick_ingredient();
+            }
+            KeyCode::Char('l') => {
+                self.log_meal_from_recipe();
+            }
+            KeyCode::Char('d') => {
+                if let Some(i) = self.recipe_ingredient_list_state.selected() {
+                    if let Some(ri) = self.current_recipe_ingredients.get(i) {
+                        let id = ri.id;
+                        let _ = database::remove_recipe_ingredient(&self.db, id);
+                        self.refresh_current_recipe_ingredients();
+                        let new_i = i.saturating_sub(1);
+                        if self.current_recipe_ingredients.is_empty() {
+                            self.recipe_ingredient_list_state.select(None);
+                        } else {
+                            self.recipe_ingredient_list_state
+                                .select(Some(new_i.min(self.current_recipe_ingredients.len() - 1)));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// @brief Handles key presses on ::Screen::PickIngredient: navigate the library list (plus a trailing "Custom" entry) and select or add.
+    /// @param code The key that was pressed.
+    fn handle_pick_ingredient_key(&mut self, code: KeyCode) {
+        let total = self.ingredients.len() + 1; // +1 for "Custom"
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => {
+                self.screen = Screen::RecipeDetail;
+            }
+            KeyCode::Up => {
+                let i = self.ingredient_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.ingredient_list_state.select(Some(i - 1));
+                }
+            }
+            KeyCode::Down => {
+                let i = self.ingredient_list_state.selected().unwrap_or(0);
+                if i + 1 < total {
+                    self.ingredient_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Enter | KeyCode::Right => {
+                let i = self.ingredient_list_state.selected().unwrap_or(0);
+                if i < self.ingredients.len() {
+                    self.pending_ingredient_id = Some(self.ingredients[i].id);
+                    self.open_add_recipe_ingredient();
+                } else {
+                    self.adding_ingredient_for_recipe = true;
+                    self.open_add_ingredient();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// @brief Handles key presses on ::Screen::IngredientLibrary: navigate, add, and delete library ingredients.
+    /// @param code The key that was pressed.
+    fn handle_ingredient_library_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Recipebook,
+            KeyCode::Up => {
+                let i = self.ingredient_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.ingredient_list_state.select(Some(i - 1));
+                }
+            }
+            KeyCode::Down => {
+                let len = self.ingredients.len();
+                let i = self.ingredient_list_state.selected().unwrap_or(0);
+                if i + 1 < len {
+                    self.ingredient_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Char('n') => {
+                self.adding_ingredient_for_recipe = false;
+                self.open_add_ingredient();
+            }
+            KeyCode::Char('s') => {
+                self.open_set_ingredient_stock();
+            }
+            KeyCode::Char('d') => {
+                if let Some(i) = self.ingredient_list_state.selected() {
+                    if let Some(ingredient) = self.ingredients.get(i) {
+                        let id = ingredient.id;
+                        let _ = database::delete_ingredient(&self.db, id);
+                        self.refresh_ingredients();
+                        let new_i = i.saturating_sub(1);
+                        if self.ingredients.is_empty() {
+                            self.ingredient_list_state.select(None);
+                        } else {
+                            self.ingredient_list_state
+                                .select(Some(new_i.min(self.ingredients.len() - 1)));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// @brief Handles key presses on ::Screen::MealHistory: navigate readings and delete the selected one.
+    /// @param code The key that was pressed.
+    fn handle_meal_history_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Recipebook,
+            KeyCode::Up => {
+                let i = self.meal_log_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.meal_log_list_state.select(Some(i - 1));
+                }
+            }
+            KeyCode::Down => {
+                let len = self.meal_log.len();
+                let i = self.meal_log_list_state.selected().unwrap_or(0);
+                if i + 1 < len {
+                    self.meal_log_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Char('d') => {
+                if let Some(i) = self.meal_log_list_state.selected() {
+                    if let Some(entry) = self.meal_log.get(i) {
+                        let id = entry.id;
+                        let _ = database::delete_meal_log_entry(&self.db, id);
+                        self.refresh_meal_log();
+                        let new_i = i.saturating_sub(1);
+                        if self.meal_log.is_empty() {
+                            self.meal_log_list_state.select(None);
+                        } else {
+                            self.meal_log_list_state
+                                .select(Some(new_i.min(self.meal_log.len() - 1)));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// @brief Opens the "new workout plan" form (::Screen::AddWorkout) with a single blank name field.
     fn open_add_workout(&mut self) {
         self.input_fields = vec![String::new()];
@@ -530,6 +943,113 @@ impl App {
         self.input_mode = true;
         self.status_msg = None;
         self.screen = Screen::AddToLibrary;
+    }
+
+    /// @brief Logs one serving of the open recipe as eaten and depletes matching pantry stock.
+    ///
+    /// No-op if `detail_recipe_id` is `None` or no longer resolves to a recipe. For each attached
+    /// ingredient with a specified `amount`, the matching library ingredient's `stock_amount` is
+    /// decremented by that amount (floored at 0) — but only if that ingredient's stock is already
+    /// being tracked (`Some`); untracked ingredients are left untracked rather than seeded from zero.
+    fn log_meal_from_recipe(&mut self) {
+        let Some(recipe) = self
+            .detail_recipe_id
+            .and_then(|id| self.recipes.iter().find(|r| r.id == id))
+            .cloned()
+        else {
+            return;
+        };
+
+        let _ = database::log_meal(&self.db, &recipe.name, &recipe.category, 1.0);
+
+        self.refresh_ingredients();
+        for ri in &self.current_recipe_ingredients {
+            let Some(amount) = ri.amount else { continue };
+            if let Some(ingredient) = self.ingredients.iter().find(|i| i.id == ri.ingredient_id) {
+                if let Some(stock) = ingredient.stock_amount {
+                    let new_stock = (stock - amount).max(0.0);
+                    let _ = database::set_ingredient_stock(
+                        &self.db, ingredient.id, Some(new_stock), &ingredient.stock_unit,
+                    );
+                }
+            }
+        }
+        self.refresh_ingredients();
+        self.refresh_meal_log();
+    }
+
+    /// @brief Opens the "set stock" form (::Screen::SetIngredientStock) for the selected library ingredient, prefilled with its current amount/unit.
+    fn open_set_ingredient_stock(&mut self) {
+        let Some(i) = self.ingredient_list_state.selected() else { return };
+        let Some(ingredient) = self.ingredients.get(i) else { return };
+
+        self.editing_ingredient_id = Some(ingredient.id);
+        self.input_fields = vec![
+            ingredient.stock_amount.map(|a| a.to_string()).unwrap_or_default(),
+            ingredient.stock_unit.clone(),
+        ];
+        self.input_labels = vec!["On Hand (optional)", "Unit (e.g. lb, cups)"];
+        self.input_index = 0;
+        self.input_mode = true;
+        self.status_msg = None;
+        self.screen = Screen::SetIngredientStock;
+    }
+
+    /// @brief Opens the "new recipe" form (::Screen::AddRecipe) with name/category/timing/instructions fields.
+    fn open_add_recipe(&mut self) {
+        self.input_fields = vec![
+            String::new(),
+            String::new(),
+            String::from("0"),
+            String::from("0"),
+            String::from("0"),
+            String::new(),
+        ];
+        self.input_labels = vec![
+            "Recipe Name",
+            "Category (Baked/Boiled/Brewed/Crafted/Fried/Grilled/Mixed/Roasted/Sauteed/Steamed/Simmered)",
+            "Prep Time (min)",
+            "Cook Time (min)",
+            "Cook Temp",
+            "Instructions",
+        ];
+        self.input_index = 0;
+        self.input_mode = true;
+        self.status_msg = None;
+        self.screen = Screen::AddRecipe;
+    }
+
+    /// @brief Refreshes the ingredient library and opens ::Screen::PickIngredient with the first item selected.
+    fn open_pick_ingredient(&mut self) {
+        self.refresh_ingredients();
+        self.ingredient_list_state.select(Some(0));
+        self.screen = Screen::PickIngredient;
+    }
+
+    /// @brief Opens the "attach ingredient" form (::Screen::AddRecipeIngredient) with blank amount/unit fields.
+    fn open_add_recipe_ingredient(&mut self) {
+        self.input_fields = vec![String::new(), String::new()];
+        self.input_labels = vec!["Amount (optional)", "Unit (optional)"];
+        self.input_index = 0;
+        self.input_mode = true;
+        self.status_msg = None;
+        self.screen = Screen::AddRecipeIngredient;
+    }
+
+    /// @brief Opens the "add ingredient" form (::Screen::AddIngredient) with blank name/category fields.
+    ///
+    /// Where this returns to on submit/cancel depends on ::App::adding_ingredient_for_recipe,
+    /// set by the caller before opening this form.
+    fn open_add_ingredient(&mut self) {
+        self.input_fields = vec![String::new(), String::new()];
+        self.input_labels = vec![
+            "Ingredient Name",
+            "Category (Condiment/Craft/Culinary/Dairy/Fat/Fish/Fruit/Herb/Grain/Meat/Nuts/Seasoning/Sweetener/Vegetable)",
+        ];
+        self.input_index = 0;
+        self.input_mode = true;
+        self.status_msg = None;
+        self.screen = Screen::AddIngredient;
     }
 
     /// @brief Opens the "add exercise" form (::Screen::AddExercise) with fields tailored to the given exercise type.
@@ -601,6 +1121,16 @@ impl App {
             Screen::AddExercise => Screen::ExerciseTypeSelect,
             Screen::LogMetrics => Screen::Dashboard,
             Screen::AddToLibrary => Screen::PickExercise,
+            Screen::AddRecipe => Screen::RecipeList,
+            Screen::AddRecipeIngredient => Screen::RecipeDetail,
+            Screen::AddIngredient => {
+                if self.adding_ingredient_for_recipe {
+                    Screen::PickIngredient
+                } else {
+                    Screen::IngredientLibrary
+                }
+            }
+            Screen::SetIngredientStock => Screen::IngredientLibrary,
             _ => Screen::Dashboard,
         };
     }
@@ -612,6 +1142,10 @@ impl App {
             Screen::AddExercise => self.submit_add_exercise(),
             Screen::LogMetrics => self.submit_log_metrics(),
             Screen::AddToLibrary => self.submit_add_to_library(),
+            Screen::AddRecipe => self.submit_add_recipe(),
+            Screen::AddRecipeIngredient => self.submit_add_recipe_ingredient(),
+            Screen::AddIngredient => self.submit_add_ingredient(),
+            Screen::SetIngredientStock => self.submit_set_ingredient_stock(),
             _ => {}
         }
     }
@@ -721,5 +1255,115 @@ impl App {
         self.input_mode = false;
         self.status_msg = None;
         self.screen = Screen::Dashboard;
+    }
+
+    /// @brief Validates and saves the "new recipe" form, then opens the new recipe in ::Screen::RecipeDetail.
+    ///
+    /// Rejects an empty (after trimming) name by setting ::App::status_msg
+    /// and leaving the form open. The category field is parsed case-insensitively,
+    /// falling back to Pending; numeric fields fall back to 0.
+    fn submit_add_recipe(&mut self) {
+        let name = self.input_fields[0].trim().to_string();
+        if name.is_empty() {
+            self.status_msg = Some("Recipe name cannot be empty.".into());
+            return;
+        }
+        let category: RecipeType = self.input_fields[1].trim().parse().unwrap_or(RecipeType::Pending);
+        let prep_min: i32 = self.input_fields[2].trim().parse().unwrap_or(0);
+        let cook_min: i32 = self.input_fields[3].trim().parse().unwrap_or(0);
+        let cook_temp: i32 = self.input_fields[4].trim().parse().unwrap_or(0);
+        let instructions = self.input_fields[5].trim().to_string();
+
+        let id = match database::create_recipe(
+            &self.db, &name, &category, prep_min, cook_min, cook_temp, &instructions,
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                self.status_msg = Some(format!("Error: {e}"));
+                return;
+            }
+        };
+        self.refresh_recipes();
+        self.detail_recipe_id = Some(id);
+        self.current_recipe_ingredients = vec![];
+        self.recipe_ingredient_list_state = ListState::default();
+        self.input_mode = false;
+        self.status_msg = None;
+        self.screen = Screen::RecipeDetail;
+    }
+
+    /// @brief Saves the "attach ingredient" form, linking ::App::pending_ingredient_id to the open recipe, then returns to ::Screen::RecipeDetail.
+    ///
+    /// Both fields are optional: an unparsable or blank amount is stored as `None`.
+    fn submit_add_recipe_ingredient(&mut self) {
+        let amount: Option<f64> = self.input_fields[0].trim().parse().ok();
+        let unit = self.input_fields[1].trim().to_string();
+
+        if let (Some(recipe_id), Some(ingredient_id)) = (self.detail_recipe_id, self.pending_ingredient_id) {
+            if let Err(e) = database::add_recipe_ingredient(&self.db, recipe_id, ingredient_id, amount, &unit) {
+                self.status_msg = Some(format!("Error: {e}"));
+                return;
+            }
+        }
+        self.pending_ingredient_id = None;
+        self.refresh_current_recipe_ingredients();
+        self.input_mode = false;
+        self.status_msg = None;
+        self.screen = Screen::RecipeDetail;
+    }
+
+    /// @brief Validates and saves the "add ingredient" form, then returns to ::Screen::PickIngredient or ::Screen::IngredientLibrary
+    /// depending on ::App::adding_ingredient_for_recipe.
+    ///
+    /// Rejects an empty (after trimming) name by setting ::App::status_msg
+    /// and leaving the form open. If the ingredient was being added mid-recipe-attach,
+    /// it is immediately selected as the pending ingredient and the amount/unit form is opened.
+    fn submit_add_ingredient(&mut self) {
+        let name = self.input_fields[0].trim().to_string();
+        if name.is_empty() {
+            self.status_msg = Some("Ingredient name cannot be empty.".into());
+            return;
+        }
+        let category: IngredientType = self.input_fields[1].trim().parse().unwrap_or(IngredientType::Pending);
+
+        if let Err(e) = database::create_ingredient(&self.db, &name, &category) {
+            self.status_msg = Some(format!("Error: {e}"));
+            return;
+        }
+        self.refresh_ingredients();
+        self.status_msg = None;
+
+        if self.adding_ingredient_for_recipe {
+            self.adding_ingredient_for_recipe = false;
+            if let Some(ingredient) = self.ingredients.iter().find(|i| i.name == name) {
+                self.pending_ingredient_id = Some(ingredient.id);
+            }
+            self.open_add_recipe_ingredient();
+        } else {
+            let idx = self.ingredients.iter().position(|i| i.name == name).unwrap_or(0);
+            self.ingredient_list_state.select(Some(idx));
+            self.input_mode = false;
+            self.screen = Screen::IngredientLibrary;
+        }
+    }
+
+    /// @brief Saves the "set stock" form for ::App::editing_ingredient_id, then returns to ::Screen::IngredientLibrary.
+    ///
+    /// A blank or unparsable amount clears the tracked stock (`None`) rather than blocking submission.
+    fn submit_set_ingredient_stock(&mut self) {
+        let amount: Option<f64> = self.input_fields[0].trim().parse().ok();
+        let unit = self.input_fields[1].trim().to_string();
+
+        if let Some(id) = self.editing_ingredient_id {
+            if let Err(e) = database::set_ingredient_stock(&self.db, id, amount, &unit) {
+                self.status_msg = Some(format!("Error: {e}"));
+                return;
+            }
+        }
+        self.editing_ingredient_id = None;
+        self.refresh_ingredients();
+        self.input_mode = false;
+        self.status_msg = None;
+        self.screen = Screen::IngredientLibrary;
     }
 }
