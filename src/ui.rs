@@ -478,18 +478,93 @@ fn render_pick_exercise(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.library_list_state);
 }
 
-/// @brief Draws the two-pane Reports screen: biometric trends on the left, exercise trends on the right.
+/// @brief Draws the three-pane Reports screen: biometric trends, exercise trends, and daily nutrition objectives.
 /// @param frame Frame to draw into.
 /// @param app Current application state.
 /// @param area Rectangle allotted to the reports body.
 fn render_reports(frame: &mut Frame, app: &App, area: Rect) {
-    let halves = Layout::default()
+    let thirds = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)])
         .split(area);
 
-    render_biometric_trends(frame, app, halves[0]);
-    render_exercise_trends(frame, app, halves[1]);
+    render_biometric_trends(frame, app, thirds[0]);
+    render_exercise_trends(frame, app, thirds[1]);
+    render_daily_objectives(frame, app, thirds[2]);
+}
+
+/// @brief Draws target daily nutrition intake computed from the most recently logged body weight.
+///
+/// Targets are derived from bodyweight-based rules of thumb (not stored, purely computed):
+/// calories = weight(lbs) × 10, protein = weight(lbs) × 0.8g, fat = weight(lbs) × 0.3g,
+/// fiber = (calories / 1000) × 14g, and carbs = whatever calories remain after fat
+/// (9 kcal/g) and protein (4 kcal/g) are accounted for, converted to grams at 4 kcal/g.
+///
+/// Scans for the most recent ::crate::models::PersonalMetric with a weight recorded (a
+/// reading may log only heart rate/BP), rather than assuming the latest entry has one.
+///
+/// @param frame Frame to draw into.
+/// @param app Current application state (used only for `app.metrics`).
+/// @param area Rectangle allotted to this panel.
+fn render_daily_objectives(frame: &mut Frame, app: &App, area: Rect) {
+    let lines = match app.metrics.iter().find_map(|m| m.weight_kg) {
+        None => vec![
+            Line::raw(""),
+            Line::from(Span::styled(
+                "  No weight logged yet.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::raw(""),
+            Line::raw("  Press [2/m] from the dashboard to log your weight."),
+        ],
+        Some(weight_kg) => {
+            const KG_TO_LB: f64 = 2.20462;
+            let weight_lbs = weight_kg * KG_TO_LB;
+
+            let calories = weight_lbs * 10.0;
+            let protein_g = weight_lbs * 0.8;
+            let fat_g = weight_lbs * 0.3;
+            let fiber_g = (calories / 1000.0) * 14.0;
+            let carbs_g = (calories - fat_g * 9.0 - protein_g * 4.0) / 4.0;
+
+            vec![
+                Line::from(Span::styled(
+                    format!("  Based on {:.1} kg ({:.1} lb)", weight_kg, weight_lbs),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::raw("  Calories  "),
+                    Span::styled(format!("{:.0} kcal", calories), Style::default().fg(Color::Green)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Protein   "),
+                    Span::styled(format!("{:.0} g", protein_g), Style::default().fg(Color::Green)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Fat       "),
+                    Span::styled(format!("{:.0} g", fat_g), Style::default().fg(Color::Green)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Carbs     "),
+                    Span::styled(format!("{:.0} g", carbs_g), Style::default().fg(Color::Green)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Fiber     "),
+                    Span::styled(format!("{:.0} g", fiber_g), Style::default().fg(Color::Green)),
+                ]),
+            ]
+        }
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Daily Objectives ")
+        .border_style(Style::default().fg(Color::Yellow));
+    frame.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// @brief Draws weight/heart-rate/blood-pressure deltas between the oldest and newest logged ::crate::models::PersonalMetric.
