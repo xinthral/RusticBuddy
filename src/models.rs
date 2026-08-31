@@ -48,6 +48,26 @@ pub struct WorkoutPlan {
     pub is_active: bool,
 }
 
+/// @brief The strength/cardio performance fields shared by ::Exercise and ::ExerciseLogEntry.
+///
+/// Bundled so `database::add_exercise`/`database::log_exercise_session` don't need one
+/// parameter per field; which fields are meaningful depends on `exercise_type`.
+#[derive(Debug, Clone)]
+pub struct ExercisePerformance {
+    /// @brief Whether this is a strength or cardio exercise.
+    pub exercise_type: ExerciseType,
+    /// @brief Number of sets (strength only).
+    pub sets: i32,
+    /// @brief Number of reps per set (strength only).
+    pub reps: i32,
+    /// @brief Weight used, in kg (strength only, optional).
+    pub weight: Option<f64>,
+    /// @brief Duration in minutes (cardio only, optional).
+    pub duration_min: Option<f64>,
+    /// @brief Distance in kilometers (cardio only, optional).
+    pub distance_km: Option<f64>,
+}
+
 /// @brief A single exercise belonging to a ::WorkoutPlan.
 ///
 /// Strength fields (`sets`, `reps`, `weight`) and cardio fields
@@ -133,6 +153,10 @@ macro_rules! category_enum {
         }
 
         impl $enum_name {
+            /// @brief Every variant, in declaration order — used to drive category-picker screens.
+            #[allow(dead_code)]
+            pub const ALL: &'static [$enum_name] = &[$($enum_name::$variant),+];
+
             pub fn as_str(&self) -> &'static str {
                 match self {
                     $($enum_name::$variant => $name),+
@@ -203,6 +227,78 @@ pub struct Ingredient {
     pub stock_amount: Option<f64>,
     /// @brief Unit of measure for `stock_amount` (e.g. "lb", "cups").
     pub stock_unit: String,
+    /// @brief Whether the user has favorited this ingredient.
+    pub is_favorite: bool,
+    /// @brief Calories per gram, if entered.
+    pub calories_per_g: Option<f64>,
+    /// @brief Protein in grams per gram of this ingredient, if entered.
+    pub protein_per_g: Option<f64>,
+    /// @brief Fat in grams per gram of this ingredient, if entered.
+    pub fat_per_g: Option<f64>,
+    /// @brief Fiber in grams per gram of this ingredient, if entered.
+    pub fiber_per_g: Option<f64>,
+    /// @brief Density in grams per milliliter, used to convert volume units (cups/tbsp/tsp/ml/l)
+    /// to grams for nutrition math. `None` means volume-unit amounts of this ingredient can't be
+    /// converted to grams.
+    pub density_g_per_ml: Option<f64>,
+}
+
+/// @brief Converts a recipe-ingredient or recipe-component amount/unit into grams, if possible.
+///
+/// Mass units (`g`/`kg`/`oz`/`lb`) convert via a fixed factor regardless of `density_g_per_ml`.
+/// Volume units (`ml`/`l`/`cup`/`tbsp`/`tsp`) convert via milliliters and then require
+/// `density_g_per_ml` to reach grams; without it (e.g. a recipe component, which has no density
+/// of its own) volume units return `None`. An unrecognized unit always returns `None`.
+///
+/// @param amount Numeric quantity, in `unit`.
+/// @param unit Unit string as entered by the user (case-insensitive, whitespace-trimmed).
+/// @param density_g_per_ml Grams per milliliter, needed only to convert volume units.
+/// @return The equivalent mass in grams, or `None` if `unit` can't be converted (as-is or for
+///         lack of density).
+pub fn grams_for(amount: f64, unit: &str, density_g_per_ml: Option<f64>) -> Option<f64> {
+    let unit = unit.trim().to_ascii_lowercase();
+
+    let mass_factor = match unit.as_str() {
+        "g" | "gram" | "grams" => Some(1.0),
+        "kg" | "kilogram" | "kilograms" => Some(1000.0),
+        "oz" | "ounce" | "ounces" => Some(28.3495),
+        "lb" | "lbs" | "pound" | "pounds" => Some(453.592),
+        _ => None,
+    };
+    if let Some(factor) = mass_factor {
+        return Some(amount * factor);
+    }
+
+    let volume_ml_factor = match unit.as_str() {
+        "ml" | "milliliter" | "milliliters" | "millilitre" | "millilitres" => Some(1.0),
+        "l" | "liter" | "liters" | "litre" | "litres" => Some(1000.0),
+        "cup" | "cups" => Some(236.588),
+        "tbsp" | "tablespoon" | "tablespoons" => Some(14.7868),
+        "tsp" | "teaspoon" | "teaspoons" => Some(4.92892),
+        _ => None,
+    };
+    let ml = volume_ml_factor? * amount;
+    Some(ml * density_g_per_ml?)
+}
+
+/// @brief A recipe's computed nutritional density, rolled up from its ingredients and sub-recipes.
+///
+/// Produced by `crate::database::compute_recipe_nutrition`. Each macro field is `None` when no
+/// contributing ingredient/sub-recipe had that particular value entered, rather than reporting a
+/// misleading zero.
+#[derive(Debug, Clone, Default)]
+pub struct RecipeNutrition {
+    /// @brief Total known weight of the recipe, in grams — the sum of every ingredient/sub-recipe
+    /// link that had a convertible gram amount. Zero if nothing could be computed.
+    pub total_grams: f64,
+    /// @brief Calories per gram of the finished recipe, if any contributor had calorie data.
+    pub calories_per_g: Option<f64>,
+    /// @brief Protein (g) per gram of the finished recipe, if any contributor had protein data.
+    pub protein_per_g: Option<f64>,
+    /// @brief Fat (g) per gram of the finished recipe, if any contributor had fat data.
+    pub fat_per_g: Option<f64>,
+    /// @brief Fiber (g) per gram of the finished recipe, if any contributor had fiber data.
+    pub fiber_per_g: Option<f64>,
 }
 
 /// @brief A cookbook recipe's metadata and instructions.
@@ -225,6 +321,27 @@ pub struct Recipe {
     pub cook_temp: i32,
     /// @brief Step-by-step cooking instructions.
     pub instructions: String,
+    /// @brief Whether the user has favorited this recipe.
+    pub is_favorite: bool,
+}
+
+/// @brief One recipe attached as a component (sub-recipe) of another recipe, joined with the
+/// child recipe's name for display.
+#[derive(Debug, Clone)]
+pub struct RecipeComponent {
+    /// @brief Primary key in the `recipe_components` table.
+    pub id: i64,
+    /// @brief Foreign key into `recipes` — the sub-recipe used as a component.
+    pub child_recipe_id: i64,
+    /// @brief Denormalized child recipe name, joined in at query time.
+    pub name: String,
+    /// @brief Quantity of the sub-recipe required, if specified.
+    pub amount: Option<f64>,
+    /// @brief Unit of measure for `amount` (e.g. "cups", "batches").
+    pub unit: String,
+    /// @brief `amount`/`unit` converted to grams at attach time (see `crate::models::grams_for`),
+    /// or `None` if `unit` couldn't be converted. Used for nutrition roll-up, not for display.
+    pub grams: Option<f64>,
 }
 
 /// @brief One ingredient attached to a recipe, joined with the ingredient's name for display.
@@ -240,6 +357,9 @@ pub struct RecipeIngredient {
     pub amount: Option<f64>,
     /// @brief Unit of measure for `amount` (e.g. "cups", "g").
     pub unit: String,
+    /// @brief `amount`/`unit` converted to grams at attach time (see `crate::models::grams_for`),
+    /// or `None` if `unit` couldn't be converted. Used for nutrition roll-up, not for display.
+    pub grams: Option<f64>,
 }
 
 /// @brief A historical record of one eaten meal.

@@ -14,8 +14,8 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 
-use crate::app::{App, Screen};
-use crate::models::{ExerciseType, Ingredient};
+use crate::app::{App, FavoritesFocus, RecipeDetailFocus, Screen, SearchResults};
+use crate::models::{ExerciseType, Ingredient, IngredientType};
 
 /// @brief Top-level draw entry point: lays out header/body/footer and dispatches the body to the handler for the current screen.
 /// @param frame The ratatui frame to draw into for this tick.
@@ -43,8 +43,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         | Screen::AddToLibrary
         | Screen::AddRecipe
         | Screen::AddRecipeIngredient
+        | Screen::AddRecipeComponent
         | Screen::AddIngredient
-        | Screen::SetIngredientStock => {
+        | Screen::SetIngredientStock
+        | Screen::SetIngredientNutrition
+        | Screen::SearchByName => {
             render_form(frame, app, chunks[1]);
         }
         Screen::ExerciseTypeSelect => render_type_select(frame, app, chunks[1]),
@@ -54,9 +57,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::RecipeList => render_recipe_list(frame, app, chunks[1]),
         Screen::RecipeDetail => render_recipe_detail(frame, app, chunks[1]),
         Screen::PickIngredient => render_pick_ingredient(frame, app, chunks[1]),
+        Screen::PickSubRecipe => render_pick_sub_recipe(frame, app, chunks[1]),
         Screen::IngredientLibrary => render_ingredient_library(frame, app, chunks[1]),
         Screen::MealHistory => render_meal_history(frame, app, chunks[1]),
         Screen::Recipebook => render_recipebook(frame, app, chunks[1]),
+        Screen::Search => render_search(frame, app, chunks[1]),
+        Screen::SearchPickCategory => render_search_pick_category(frame, app, chunks[1]),
+        Screen::SearchResults => render_search_results(frame, app, chunks[1]),
+        Screen::Favorites => render_favorites(frame, app, chunks[1]),
     }
 
     render_footer(frame, app, chunks[2]);
@@ -84,11 +92,19 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         Screen::AddRecipe => " Rustic Buddy  —  New Recipe ",
         Screen::PickIngredient => " Rustic Buddy  —  Select Ingredient ",
         Screen::AddRecipeIngredient => " Rustic Buddy  —  Ingredient Amount ",
+        Screen::PickSubRecipe => " Rustic Buddy  —  Select Sub-Recipe ",
+        Screen::AddRecipeComponent => " Rustic Buddy  —  Sub-Recipe Amount ",
         Screen::IngredientLibrary => " Rustic Buddy  —  Ingredients ",
         Screen::AddIngredient => " Rustic Buddy  —  Add Ingredient ",
         Screen::SetIngredientStock => " Rustic Buddy  —  Set Stock ",
+        Screen::SetIngredientNutrition => " Rustic Buddy  —  Set Nutrition ",
         Screen::MealHistory => " Rustic Buddy  —  Meal Log ",
         Screen::Recipebook => " Rustic Buddy  —  Recipebook ",
+        Screen::Search => " Rustic Buddy  —  Search ",
+        Screen::SearchByName => " Rustic Buddy  —  Search ",
+        Screen::SearchPickCategory => " Rustic Buddy  —  Search by Category ",
+        Screen::SearchResults => " Rustic Buddy  —  Search Results ",
+        Screen::Favorites => " Rustic Buddy  —  Favorites ",
     };
     let para = Paragraph::new(title)
         .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)))
@@ -103,7 +119,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.screen {
         Screen::Dashboard => "[↑↓] Navigate  [Enter/→] Open  [1-5] Jump  [q] Quit",
-        Screen::Recipebook => "[↑↓] Navigate  [Enter/→] Open  [1-3] Jump  [←/Esc/q] Back",
+        Screen::Recipebook => "[↑↓] Navigate  [Enter/→] Open  [1-5] Jump  [←/Esc/q] Back",
         Screen::WorkoutList => "[↑↓] Navigate  [Enter/→] Open  [a] Set Active  [n] New  [d] Delete  [←/Esc/q] Back",
         Screen::WorkoutDetail => "[↑↓] Navigate  [n] Add  [l] Log session  [d] Delete  [←/Esc/q] Back",
         Screen::AddWorkout
@@ -112,19 +128,31 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         | Screen::AddToLibrary
         | Screen::AddRecipe
         | Screen::AddRecipeIngredient
+        | Screen::AddRecipeComponent
         | Screen::AddIngredient
-        | Screen::SetIngredientStock => {
+        | Screen::SetIngredientStock
+        | Screen::SetIngredientNutrition
+        | Screen::SearchByName => {
             "[Tab/Enter] Next Field  [Shift+Tab] Prev  [Enter] Submit on last field  [Esc] Cancel"
         }
         Screen::ExerciseTypeSelect => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
         Screen::PickExercise => "[↑↓] Navigate  [Enter/→] Select  [n] Add to library  [←/Esc/q] Back",
         Screen::MetricsHistory => "[↑↓] Navigate  [d] Delete  [←/Esc/q] Back",
         Screen::Reports => "[←/Esc/q] Back",
-        Screen::RecipeList => "[↑↓] Navigate  [Enter/→] Open  [n] New  [d] Delete  [←/Esc/q] Back",
-        Screen::RecipeDetail => "[↑↓] Navigate  [n] Add Ingredient  [l] Log Meal  [d] Remove Ingredient  [←/Esc/q] Back",
+        Screen::RecipeList => "[↑↓] Navigate  [Enter/→] Open  [n] New  [f] Favorite  [d] Delete  [←/Esc/q] Back",
+        Screen::RecipeDetail => {
+            "[Tab] Switch Pane  [↑↓] Navigate  [n] Add  [Enter/→] Open Sub-Recipe  [l] Log Meal  [f] Favorite  [d] Remove  [←/Esc/q] Back"
+        }
         Screen::PickIngredient => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
-        Screen::IngredientLibrary => "[↑↓] Navigate  [n] New  [s] Set Stock  [d] Delete  [←/Esc/q] Back",
+        Screen::PickSubRecipe => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
+        Screen::IngredientLibrary => {
+            "[↑↓] Navigate  [n] New  [s] Set Stock  [u] Set Nutrition  [f] Favorite  [d] Delete  [←/Esc/q] Back"
+        }
         Screen::MealHistory => "[↑↓] Navigate  [d] Delete  [←/Esc/q] Back",
+        Screen::Search => "[↑↓] Navigate  [Enter/→] Select  [1-6] Jump  [←/Esc/q] Back",
+        Screen::SearchPickCategory => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
+        Screen::SearchResults => "[↑↓] Navigate  [Enter/→] Open  [←/Esc/q] Back to Search",
+        Screen::Favorites => "[Tab] Switch Pane  [↑↓] Navigate  [Enter/→] Open  [f] Unfavorite  [←/Esc/q] Back",
     };
     let para = Paragraph::new(hints)
         .block(Block::default().borders(Borders::ALL))
@@ -265,12 +293,12 @@ fn render_dashboard(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-/// @brief Draws the Recipebook submenu: Recipes, Ingredients, and Meal Log.
+/// @brief Draws the Recipebook submenu: Recipes, Ingredients, Meal Log, Search, and Favorites.
 /// @param frame Frame to draw into.
 /// @param app Current application state; `recipebook_list_state` tracks selection/scroll.
 /// @param area Rectangle allotted to the menu.
 fn render_recipebook(frame: &mut Frame, app: &mut App, area: Rect) {
-    let items: Vec<ListItem> = ["Recipes", "Ingredients", "Meal Log"]
+    let items: Vec<ListItem> = ["Recipes", "Ingredients", "Meal Log", "Search", "Favorites"]
         .iter()
         .map(|label| ListItem::new(format!("  {label}")))
         .collect();
@@ -281,6 +309,131 @@ fn render_recipebook(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_symbol("▶ ");
 
     frame.render_stateful_widget(list, area, &mut app.recipebook_list_state);
+}
+
+/// @brief Draws the Search submenu offering the five search modes.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `search_menu_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the menu.
+fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = [
+        "Ingredients by Type",
+        "Ingredients by Name",
+        "Recipes by Name",
+        "Recipes containing Ingredient (by Name)",
+        "Recipes containing Ingredient (by Type)",
+        "Recipes containing Sub-Recipe (by Name)",
+    ]
+    .iter()
+    .map(|label| ListItem::new(format!("  {label}")))
+    .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Search "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, area, &mut app.search_menu_list_state);
+}
+
+/// @brief Draws a picker over every ::IngredientType variant, for the two category-based search modes.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `search_category_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the picker.
+fn render_search_pick_category(frame: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = IngredientType::ALL
+        .iter()
+        .map(|c| ListItem::new(format!("  {c}")))
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Select a Category "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, area, &mut app.search_category_list_state);
+}
+
+/// @brief Draws the matches from the most recently run search (::App::search_results), titled with ::App::search_result_label.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `search_results_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the results list.
+fn render_search_results(frame: &mut Frame, app: &mut App, area: Rect) {
+    let mut items: Vec<ListItem> = match &app.search_results {
+        SearchResults::Ingredients(ingredients) => ingredients
+            .iter()
+            .map(|i| ListItem::new(format!("  {}{}  ({})  —  {}", favorite_mark(i.is_favorite), i.name, i.category, stock_label(i))))
+            .collect(),
+        SearchResults::Recipes(recipes) => recipes
+            .iter()
+            .map(|r| ListItem::new(format!("  {}{}  ({})", favorite_mark(r.is_favorite), r.name, r.category)))
+            .collect(),
+    };
+    if items.is_empty() {
+        items.push(ListItem::new(Span::styled(
+            "  No matches.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let title = format!(" {} ", app.search_result_label);
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(list, area, &mut app.search_results_list_state);
+}
+
+/// @brief Draws the Favorites screen: a Recipes pane and an Ingredients pane, side by side.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `favorite_recipes_list_state`/`favorite_ingredients_list_state`
+/// track selection/scroll, `favorites_focus` picks which pane is highlighted.
+/// @param area Rectangle allotted to the screen.
+fn render_favorites(frame: &mut Frame, app: &mut App, area: Rect) {
+    let halves = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+        .split(area);
+
+    let focused_style = Style::default().fg(Color::Yellow);
+    let unfocused_style = Style::default();
+
+    let mut recipe_items: Vec<ListItem> = app
+        .favorite_recipes
+        .iter()
+        .map(|r| ListItem::new(format!("  {}{}  ({})", favorite_mark(r.is_favorite), r.name, r.category)))
+        .collect();
+    if recipe_items.is_empty() {
+        recipe_items.push(ListItem::new(Span::styled(
+            "  No favorite recipes yet — press [f] on a recipe to favorite it",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    let recipe_border = if app.favorites_focus == FavoritesFocus::Recipes { focused_style } else { unfocused_style };
+    let recipe_list = List::new(recipe_items)
+        .block(Block::default().borders(Borders::ALL).title(" Favorite Recipes ").border_style(recipe_border))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+    frame.render_stateful_widget(recipe_list, halves[0], &mut app.favorite_recipes_list_state);
+
+    let mut ingredient_items: Vec<ListItem> = app
+        .favorite_ingredients
+        .iter()
+        .map(|i| ListItem::new(format!("  {}{}  ({})  —  {}", favorite_mark(i.is_favorite), i.name, i.category, stock_label(i))))
+        .collect();
+    if ingredient_items.is_empty() {
+        ingredient_items.push(ListItem::new(Span::styled(
+            "  No favorite ingredients yet — press [f] on an ingredient to favorite it",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    let ingredient_border = if app.favorites_focus == FavoritesFocus::Ingredients { focused_style } else { unfocused_style };
+    let ingredient_list = List::new(ingredient_items)
+        .block(Block::default().borders(Borders::ALL).title(" Favorite Ingredients ").border_style(ingredient_border))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+    frame.render_stateful_widget(ingredient_list, halves[1], &mut app.favorite_ingredients_list_state);
 }
 
 /// @brief Draws the list of workout plans, marking the active one with a star.
@@ -936,7 +1089,7 @@ fn render_recipe_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app
         .recipes
         .iter()
-        .map(|r| ListItem::new(format!("  {}  ({})", r.name, r.category)))
+        .map(|r| ListItem::new(format!("  {}{}  ({})", favorite_mark(r.is_favorite), r.name, r.category)))
         .collect();
 
     let list = List::new(items)
@@ -965,6 +1118,7 @@ fn render_recipe_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut lines = vec![
             Line::from(vec![
                 Span::raw("  "),
+                Span::raw(favorite_mark(recipe.is_favorite)),
                 Span::styled(
                     recipe.name.as_str(),
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
@@ -983,6 +1137,21 @@ fn render_recipe_detail(frame: &mut Frame, app: &mut App, area: Rect) {
             if recipe.cook_temp > 0 {
                 lines.push(Line::raw(format!("  Temp: {}°", recipe.cook_temp)));
             }
+            lines.push(Line::raw(""));
+        }
+        if app.current_recipe_nutrition.total_grams > 0.0 {
+            lines.push(Line::from(Span::styled("  Nutrition (per gram):", Style::default().add_modifier(Modifier::BOLD))));
+            lines.push(Line::raw(format!("  Total weight: {:.0} g", app.current_recipe_nutrition.total_grams)));
+            lines.push(Line::raw(format!("  {}", macro_label("Calories", app.current_recipe_nutrition.calories_per_g))));
+            lines.push(Line::raw(format!("  {}", macro_label("Protein", app.current_recipe_nutrition.protein_per_g))));
+            lines.push(Line::raw(format!("  {}", macro_label("Fat", app.current_recipe_nutrition.fat_per_g))));
+            lines.push(Line::raw(format!("  {}", macro_label("Fiber", app.current_recipe_nutrition.fiber_per_g))));
+            lines.push(Line::raw(""));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  No nutrition data yet — attach ingredients with nutrition set, or sub-recipes with gram-convertible amounts.",
+                Style::default().fg(Color::DarkGray),
+            )));
             lines.push(Line::raw(""));
         }
         if recipe.instructions.is_empty() {
@@ -1008,32 +1177,115 @@ fn render_recipe_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         halves[0],
     );
 
-    let mut items: Vec<ListItem> = app
+    let panes = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+        .split(halves[1]);
+
+    let focused_style = Style::default().fg(Color::Yellow);
+    let unfocused_style = Style::default();
+
+    let mut ingredient_items: Vec<ListItem> = app
         .current_recipe_ingredients
         .iter()
-        .map(|ri| {
-            let qty = match (ri.amount, ri.unit.is_empty()) {
-                (Some(a), true) => format!("{a} "),
-                (Some(a), false) => format!("{a} {} ", ri.unit),
-                (None, true) => String::new(),
-                (None, false) => format!("{} ", ri.unit),
-            };
-            ListItem::new(format!("  {}{}", qty, ri.name))
-        })
+        .map(|ri| ListItem::new(format!("  {}{}", qty_label(ri.amount, &ri.unit, ri.grams), ri.name)))
         .collect();
+    if ingredient_items.is_empty() {
+        ingredient_items.push(ListItem::new(Span::styled(
+            "  No ingredients yet — press [n] to attach one",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    let ingredient_border = if app.recipe_detail_focus == RecipeDetailFocus::Ingredients {
+        focused_style
+    } else {
+        unfocused_style
+    };
+    let ingredient_list = List::new(ingredient_items)
+        .block(Block::default().borders(Borders::ALL).title(" Ingredients ").border_style(ingredient_border))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+    frame.render_stateful_widget(ingredient_list, panes[0], &mut app.recipe_ingredient_list_state);
+
+    let mut component_items: Vec<ListItem> = app
+        .current_recipe_components
+        .iter()
+        .map(|rc| ListItem::new(format!("  {}{}", qty_label(rc.amount, &rc.unit, rc.grams), rc.name)))
+        .collect();
+    if component_items.is_empty() {
+        component_items.push(ListItem::new(Span::styled(
+            "  No sub-recipes yet — press [n] to attach one",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    let component_border = if app.recipe_detail_focus == RecipeDetailFocus::Components {
+        focused_style
+    } else {
+        unfocused_style
+    };
+    let component_list = List::new(component_items)
+        .block(Block::default().borders(Borders::ALL).title(" Sub-Recipes ").border_style(component_border))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+    frame.render_stateful_widget(component_list, panes[1], &mut app.recipe_component_list_state);
+}
+
+/// @brief Formats one line of ::RecipeNutrition's per-gram output, e.g. `"Calories: 2.10 / g"`.
+/// @param label Macro name (e.g. `"Calories"`).
+/// @param per_g The computed per-gram value, or `None` if no contributor had this macro's data.
+/// @return e.g. `"Calories: 2.10 / g"`, or `"Calories: unknown"` when `per_g` is `None`.
+fn macro_label(label: &str, per_g: Option<f64>) -> String {
+    match per_g {
+        Some(v) => format!("{label}: {v:.2} / g"),
+        None => format!("{label}: unknown"),
+    }
+}
+
+/// @brief Formats an optional amount/unit pair as a leading quantity label, appending the
+/// auto-converted gram amount when known and not already redundant with a bare grams unit.
+/// @param amount Quantity, if specified.
+/// @param unit Unit of measure; may be empty even when `amount` is `Some`.
+/// @param grams The amount/unit converted to grams (see `crate::models::grams_for`), if known.
+/// @return e.g. `"2 cups (≈240g) "`, `"1 lb (≈454g) "`, `"2 "`, `"cups "`, or `""`.
+fn qty_label(amount: Option<f64>, unit: &str, grams: Option<f64>) -> String {
+    let base = match (amount, unit.is_empty()) {
+        (Some(a), true) => format!("{a} "),
+        (Some(a), false) => format!("{a} {unit} "),
+        (None, true) => String::new(),
+        (None, false) => format!("{unit} "),
+    };
+    let is_bare_grams = matches!(unit.trim().to_ascii_lowercase().as_str(), "g" | "gram" | "grams");
+    match grams {
+        Some(g) if !is_bare_grams => format!("{base}(≈{g:.0}g) "),
+        _ => base,
+    }
+}
+
+/// @brief Draws the sub-recipe picker: every existing recipe eligible to be attached as a component
+/// of the recipe open in ::Screen::RecipeDetail (self and cycle-causing recipes already filtered out).
+/// @param frame Frame to draw into.
+/// @param app Current application state; `pick_sub_recipe_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the picker.
+fn render_pick_sub_recipe(frame: &mut Frame, app: &mut App, area: Rect) {
+    let mut items: Vec<ListItem> = app
+        .sub_recipe_candidates
+        .iter()
+        .map(|r| ListItem::new(format!("  {}  ({})", r.name, r.category)))
+        .collect();
+
     if items.is_empty() {
         items.push(ListItem::new(Span::styled(
-            "  No ingredients yet — press [n] to attach one",
+            "  No eligible recipes — create another recipe first",
             Style::default().fg(Color::DarkGray),
         )));
     }
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" Ingredients "))
+        .block(Block::default().borders(Borders::ALL).title(" Select a Sub-Recipe "))
         .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
         .highlight_symbol("▶ ");
 
-    frame.render_stateful_widget(list, halves[1], &mut app.recipe_ingredient_list_state);
+    frame.render_stateful_widget(list, area, &mut app.pick_sub_recipe_list_state);
 }
 
 /// @brief Draws the ingredient-library picker, appending a "Custom ingredient..." entry after the library items.
@@ -1044,7 +1296,7 @@ fn render_pick_ingredient(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut items: Vec<ListItem> = app
         .ingredients
         .iter()
-        .map(|i| ListItem::new(format!("  {}  ({})  —  {}", i.name, i.category, stock_label(i))))
+        .map(|i| ListItem::new(format!("  {}{}  ({})  —  {}", favorite_mark(i.is_favorite), i.name, i.category, stock_label(i))))
         .collect();
 
     if items.is_empty() {
@@ -1067,15 +1319,21 @@ fn render_pick_ingredient(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.ingredient_list_state);
 }
 
-/// @brief Draws the full ingredient library as a browsable, alphabetical list.
+/// @brief Draws the ingredient library as a two-pane view: a browsable, alphabetical list on the
+/// left, and the nutrient facts for whichever ingredient is selected on the right.
 /// @param frame Frame to draw into.
 /// @param app Current application state; `ingredient_list_state` tracks selection/scroll.
-/// @param area Rectangle allotted to the list.
+/// @param area Rectangle allotted to the view.
 fn render_ingredient_library(frame: &mut Frame, app: &mut App, area: Rect) {
+    let halves = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+
     let items: Vec<ListItem> = app
         .ingredients
         .iter()
-        .map(|i| ListItem::new(format!("  {}  ({})  —  {}", i.name, i.category, stock_label(i))))
+        .map(|i| ListItem::new(format!("  {}{}  ({})  —  {}", favorite_mark(i.is_favorite), i.name, i.category, stock_label(i))))
         .collect();
 
     let list = List::new(items)
@@ -1083,7 +1341,65 @@ fn render_ingredient_library(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
         .highlight_symbol("▶ ");
 
-    frame.render_stateful_widget(list, area, &mut app.ingredient_list_state);
+    frame.render_stateful_widget(list, halves[0], &mut app.ingredient_list_state);
+
+    let selected = app
+        .ingredient_list_state
+        .selected()
+        .and_then(|i| app.ingredients.get(i));
+
+    let facts_lines = if let Some(ingredient) = selected {
+        let mut lines = vec![
+            Line::from(vec![
+                Span::raw("  "),
+                Span::raw(favorite_mark(ingredient.is_favorite)),
+                Span::styled(
+                    ingredient.name.as_str(),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(Span::styled(format!("  {}", ingredient.category), Style::default().fg(Color::DarkGray))),
+            Line::raw(""),
+            Line::raw(format!("  Stock: {}", stock_label(ingredient))),
+            Line::raw(""),
+        ];
+        if ingredient.calories_per_g.is_none()
+            && ingredient.protein_per_g.is_none()
+            && ingredient.fat_per_g.is_none()
+            && ingredient.fiber_per_g.is_none()
+        {
+            lines.push(Line::from(Span::styled(
+                "  No nutrition data yet — press [u] to set it.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled("  Nutrition (per gram):", Style::default().add_modifier(Modifier::BOLD))));
+            lines.push(Line::raw(format!("  {}", macro_label("Calories", ingredient.calories_per_g))));
+            lines.push(Line::raw(format!("  {}", macro_label("Protein", ingredient.protein_per_g))));
+            lines.push(Line::raw(format!("  {}", macro_label("Fat", ingredient.fat_per_g))));
+            lines.push(Line::raw(format!("  {}", macro_label("Fiber", ingredient.fiber_per_g))));
+        }
+        lines.push(Line::raw(""));
+        match ingredient.density_g_per_ml {
+            Some(d) => lines.push(Line::raw(format!("  Density: {d:.3} g/mL"))),
+            None => lines.push(Line::from(Span::styled(
+                "  Density: unknown (volume-unit amounts of this ingredient won't convert to grams)",
+                Style::default().fg(Color::DarkGray),
+            ))),
+        }
+        lines
+    } else {
+        vec![Line::raw(""), Line::from(Span::styled("  No ingredients yet — press [n] to add one.", Style::default().fg(Color::DarkGray)))]
+    };
+
+    let facts_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Nutrient Facts ")
+        .border_style(Style::default().fg(Color::Green));
+    frame.render_widget(
+        Paragraph::new(facts_lines).block(facts_block).wrap(Wrap { trim: false }),
+        halves[1],
+    );
 }
 
 /// @brief Formats an ingredient's on-hand stock for display, or a placeholder if untracked.
@@ -1095,6 +1411,13 @@ fn stock_label(ingredient: &Ingredient) -> String {
         Some(amount) => format!("{amount} {} on hand", ingredient.stock_unit),
         None => "not tracked".to_string(),
     }
+}
+
+/// @brief Returns a leading star marker for a favorited item, padded to the same width otherwise.
+/// @param is_favorite Whether the item is favorited.
+/// @return `"★ "` if favorited, else `"  "`, so list columns stay aligned either way.
+fn favorite_mark(is_favorite: bool) -> &'static str {
+    if is_favorite { "★ " } else { "  " }
 }
 
 /// @brief Draws the full meal history as a scrollable, newest-first list.
