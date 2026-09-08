@@ -241,6 +241,29 @@ pub fn add_exercise(
     Ok(())
 }
 
+/// @brief Updates an existing exercise's name and performance fields in place.
+///
+/// Used by ::crate::app::App's exercise-edit form so bumping a working weight updates the
+/// existing plan row instead of leaving the old one behind — the accidental cause of the
+/// duplicate-exercise rows this was added to fix.
+///
+/// @param conn Open database connection.
+/// @param id Primary key of the exercise to update.
+/// @param name New exercise name.
+/// @param perf New sets/reps/weight (strength) or duration/distance (cardio) values.
+/// @return `Ok(())` on success.
+pub fn update_exercise(conn: &Connection, id: i64, name: &str, perf: &ExercisePerformance) -> Result<()> {
+    conn.execute(
+        "UPDATE exercises SET name = ?1, exercise_type = ?2, sets = ?3, reps = ?4, weight = ?5,
+         duration_min = ?6, distance_km = ?7 WHERE id = ?8",
+        params![
+            name, perf.exercise_type.as_str(), perf.sets, perf.reps,
+            perf.weight, perf.duration_min, perf.distance_km, id,
+        ],
+    )?;
+    Ok(())
+}
+
 /// @brief Deletes a single exercise from its workout plan.
 /// @param conn Open database connection.
 /// @param id Primary key of the exercise to delete.
@@ -281,23 +304,56 @@ pub fn log_exercise_session(
 /// @return All rows of `exercise_log`, ordered by `(exercise_name, logged_at)`.
 pub fn get_exercise_logs(conn: &Connection) -> Result<Vec<ExerciseLogEntry>> {
     let mut stmt = conn.prepare(
-        "SELECT exercise_name, exercise_type, sets, reps, weight, duration_min, distance_km, logged_at
+        "SELECT id, exercise_name, exercise_type, sets, reps, weight, duration_min, distance_km, logged_at
          FROM exercise_log ORDER BY exercise_name, logged_at",
     )?;
     stmt.query_map([], |row| {
-        let type_str: String = row.get(1)?;
+        let type_str: String = row.get(2)?;
         Ok(ExerciseLogEntry {
-            exercise_name: row.get(0)?,
+            id: row.get(0)?,
+            exercise_name: row.get(1)?,
             exercise_type: type_str.parse().unwrap_or(ExerciseType::Strength),
-            sets: row.get(2)?,
-            reps: row.get(3)?,
-            weight: row.get(4)?,
-            duration_min: row.get(5)?,
-            distance_km: row.get(6)?,
-            logged_at: row.get(7)?,
+            sets: row.get(3)?,
+            reps: row.get(4)?,
+            weight: row.get(5)?,
+            duration_min: row.get(6)?,
+            distance_km: row.get(7)?,
+            logged_at: row.get(8)?,
         })
     })?
     .collect()
+}
+
+/// @brief Updates one logged session's performance fields in place.
+///
+/// Lets a mis-logged session (wrong weight, double-pressed `[l]`, etc.) be corrected without
+/// losing its original timestamp or position in history, unlike ::update_exercise which only
+/// ever touches the current plan row, never past log entries.
+///
+/// @param conn Open database connection.
+/// @param id Primary key of the `exercise_log` row to update.
+/// @param name New exercise name for this entry.
+/// @param perf New sets/reps/weight (strength) or duration/distance (cardio) values.
+/// @return `Ok(())` on success.
+pub fn update_exercise_log_entry(conn: &Connection, id: i64, name: &str, perf: &ExercisePerformance) -> Result<()> {
+    conn.execute(
+        "UPDATE exercise_log SET exercise_name = ?1, exercise_type = ?2, sets = ?3, reps = ?4,
+         weight = ?5, duration_min = ?6, distance_km = ?7 WHERE id = ?8",
+        params![
+            name, perf.exercise_type.as_str(), perf.sets, perf.reps,
+            perf.weight, perf.duration_min, perf.distance_km, id,
+        ],
+    )?;
+    Ok(())
+}
+
+/// @brief Deletes a single logged session.
+/// @param conn Open database connection.
+/// @param id Primary key of the `exercise_log` row to delete.
+/// @return `Ok(())` on success.
+pub fn delete_exercise_log_entry(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM exercise_log WHERE id = ?1", params![id])?;
+    Ok(())
 }
 
 /// @brief Fetches all exercise names in the reusable library, alphabetically.

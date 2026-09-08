@@ -10,12 +10,16 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{
+        Axis, Block, Borders, Chart, Dataset, GraphType, LegendPosition, List, ListItem,
+        Paragraph, Wrap,
+    },
 };
 
 use crate::app::{App, FavoritesFocus, RecipeDetailFocus, Screen, SearchResults};
-use crate::models::{ExerciseType, Ingredient, IngredientType};
+use crate::models::{ExerciseLogEntry, ExerciseType, Ingredient, IngredientType};
 
 /// @brief Top-level draw entry point: lays out header/body/footer and dispatches the body to the handler for the current screen.
 /// @param frame The ratatui frame to draw into for this tick.
@@ -37,8 +41,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::Dashboard => render_dashboard(frame, app, chunks[1]),
         Screen::WorkoutList => render_workout_list(frame, app, chunks[1]),
         Screen::WorkoutDetail => render_workout_detail(frame, app, chunks[1]),
+        Screen::WorkoutGraph => render_workout_graph(frame, app, chunks[1]),
+        Screen::ExerciseGraph => render_exercise_graph(frame, app, chunks[1]),
         Screen::AddWorkout
         | Screen::AddExercise
+        | Screen::UpdateExercise
+        | Screen::EditExerciseLog
         | Screen::LogMetrics
         | Screen::AddToLibrary
         | Screen::AddRecipe
@@ -52,7 +60,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         Screen::ExerciseTypeSelect => render_type_select(frame, app, chunks[1]),
         Screen::MetricsHistory => render_metrics_history(frame, app, chunks[1]),
+        Screen::MetricsGraph => render_metrics_graph(frame, app, chunks[1]),
         Screen::Reports => render_reports(frame, app, chunks[1]),
+        Screen::ExerciseHistory => render_exercise_history(frame, app, chunks[1]),
+        Screen::ExerciseSessionLog => render_exercise_session_log(frame, app, chunks[1]),
         Screen::PickExercise => render_pick_exercise(frame, app, chunks[1]),
         Screen::RecipeList => render_recipe_list(frame, app, chunks[1]),
         Screen::RecipeDetail => render_recipe_detail(frame, app, chunks[1]),
@@ -79,12 +90,19 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         Screen::Dashboard => " Rustic Buddy  —  Dashboard ",
         Screen::WorkoutList => " Rustic Buddy  —  Workouts ",
         Screen::WorkoutDetail => " Rustic Buddy  —  Workout Detail ",
+        Screen::WorkoutGraph => " Rustic Buddy  —  Workout Graph ",
+        Screen::ExerciseGraph => " Rustic Buddy  —  Exercise Graph ",
         Screen::AddWorkout => " Rustic Buddy  —  New Workout ",
         Screen::AddExercise => " Rustic Buddy  —  Add Exercise ",
+        Screen::UpdateExercise => " Rustic Buddy  —  Update Exercise ",
+        Screen::EditExerciseLog => " Rustic Buddy  —  Edit Session ",
         Screen::ExerciseTypeSelect => " Rustic Buddy  —  Exercise Type ",
         Screen::LogMetrics => " Rustic Buddy  —  Log Metrics ",
         Screen::MetricsHistory => " Rustic Buddy  —  Metrics History ",
+        Screen::MetricsGraph => " Rustic Buddy  —  Metrics Graph ",
         Screen::Reports => " Rustic Buddy  —  Reports ",
+        Screen::ExerciseHistory => " Rustic Buddy  —  All Exercises ",
+        Screen::ExerciseSessionLog => " Rustic Buddy  —  Exercise Sessions ",
         Screen::PickExercise => " Rustic Buddy  —  Select Exercise ",
         Screen::AddToLibrary => " Rustic Buddy  —  Add to Library ",
         Screen::RecipeList => " Rustic Buddy  —  Recipes ",
@@ -120,10 +138,14 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.screen {
         Screen::Dashboard => "[↑↓] Navigate  [Enter/→] Open  [1-5] Jump  [q] Quit",
         Screen::Recipebook => "[↑↓] Navigate  [Enter/→] Open  [1-5] Jump  [←/Esc/q] Back",
-        Screen::WorkoutList => "[↑↓] Navigate  [Enter/→] Open  [a] Set Active  [n] New  [d] Delete  [←/Esc/q] Back",
-        Screen::WorkoutDetail => "[↑↓] Navigate  [n] Add  [l] Log session  [d] Delete  [←/Esc/q] Back",
+        Screen::WorkoutList => "[↑↓] Navigate  [Enter/→] Open  [a] Set Active  [n] New  [d] Delete  [g] Graph  [←/Esc/q] Back",
+        Screen::WorkoutDetail => "[↑↓] Navigate  [n] Add  [u] Update  [l] Log session  [g] Graph  [d] Delete  [←/Esc/q] Back",
+        Screen::WorkoutGraph => "[←/Esc/q] Back",
+        Screen::ExerciseGraph => "[←/Esc/q] Back",
         Screen::AddWorkout
         | Screen::AddExercise
+        | Screen::UpdateExercise
+        | Screen::EditExerciseLog
         | Screen::LogMetrics
         | Screen::AddToLibrary
         | Screen::AddRecipe
@@ -137,8 +159,11 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
         Screen::ExerciseTypeSelect => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
         Screen::PickExercise => "[↑↓] Navigate  [Enter/→] Select  [n] Add to library  [←/Esc/q] Back",
-        Screen::MetricsHistory => "[↑↓] Navigate  [d] Delete  [←/Esc/q] Back",
-        Screen::Reports => "[←/Esc/q] Back",
+        Screen::MetricsHistory => "[↑↓] Navigate  [d] Delete  [g] Graph  [←/Esc/q] Back",
+        Screen::MetricsGraph => "[←/Esc/q] Back",
+        Screen::Reports => "[e] All Exercises  [←/Esc/q] Back",
+        Screen::ExerciseHistory => "[↑↓] Navigate  [Enter/→] View Sessions  [←/Esc/q] Back",
+        Screen::ExerciseSessionLog => "[↑↓] Navigate  [e] Edit  [d] Delete  [←/Esc/q] Back",
         Screen::RecipeList => "[↑↓] Navigate  [Enter/→] Open  [n] New  [f] Favorite  [d] Delete  [←/Esc/q] Back",
         Screen::RecipeDetail => {
             "[Tab] Switch Pane  [↑↓] Navigate  [n] Add  [Enter/→] Open Sub-Recipe  [l] Log Meal  [f] Favorite  [d] Remove  [←/Esc/q] Back"
@@ -874,21 +899,148 @@ fn int_trend(delta: i32) -> (&'static str, Color) {
     else { ("→", Color::DarkGray) }
 }
 
-/// @brief Draws per-exercise trend summaries, grouping consecutive log entries by exercise name.
+/// @brief Renders one ::crate::models::ExerciseSummary as the block of lines shown for it in both
+/// the Reports "Exercise Trends" panel and the full ::Screen::ExerciseHistory list: name, session
+/// count, and the change between its first and most recent logged session (sets/reps/weight for
+/// strength, duration/distance for cardio).
+/// @param s The exercise's summarized history.
+/// @return The lines for this exercise, including a trailing blank separator line.
+fn exercise_summary_lines(s: &crate::models::ExerciseSummary) -> Vec<Line<'static>> {
+    let count = s.session_count;
+    let (first, last) = (&s.first, &s.last);
+
+    let session_label = if count == 1 { "1 session".to_string() } else { format!("{count} sessions") };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("  {}", s.name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  {session_label}"), Style::default().fg(Color::DarkGray)),
+    ])];
+
+    match first.exercise_type {
+        ExerciseType::Strength => {
+            // Sets
+            let sets_delta = last.sets - first.sets;
+            let (sets_arrow, _) = int_trend(sets_delta);
+            if count > 1 && sets_delta != 0 {
+                lines.push(Line::from(vec![
+                    Span::raw("  Sets   "),
+                    Span::styled(first.sets.to_string(), Style::default().fg(Color::DarkGray)),
+                    Span::raw(" → "),
+                    Span::styled(format!("{} {}", last.sets, sets_arrow), Style::default().fg(Color::Green)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::raw("  Sets   "),
+                    Span::styled(last.sets.to_string(), Style::default().fg(Color::Green)),
+                ]));
+            }
+
+            // Reps
+            let reps_delta = last.reps - first.reps;
+            let (reps_arrow, _) = int_trend(reps_delta);
+            if count > 1 && reps_delta != 0 {
+                lines.push(Line::from(vec![
+                    Span::raw("  Reps   "),
+                    Span::styled(first.reps.to_string(), Style::default().fg(Color::DarkGray)),
+                    Span::raw(" → "),
+                    Span::styled(format!("{} {}", last.reps, reps_arrow), Style::default().fg(Color::Green)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::raw("  Reps   "),
+                    Span::styled(last.reps.to_string(), Style::default().fg(Color::Green)),
+                ]));
+            }
+
+            // Weight
+            match (first.weight, last.weight) {
+                (Some(fw), Some(lw)) if count > 1 => {
+                    let delta = lw - fw;
+                    let (arrow, color) = float_trend(delta);
+                    lines.push(Line::from(vec![
+                        Span::raw("  Weight "),
+                        Span::styled(format!("{fw:.1}"), Style::default().fg(Color::DarkGray)),
+                        Span::raw(" → "),
+                        Span::styled(format!("{lw:.1} kg"), Style::default().fg(Color::Cyan)),
+                        Span::raw("  "),
+                        Span::styled(format!("{arrow} {delta:+.1}"), Style::default().fg(color)),
+                    ]));
+                }
+                (Some(w), _) => {
+                    lines.push(Line::from(vec![
+                        Span::raw("  Weight "),
+                        Span::styled(format!("{w:.1} kg"), Style::default().fg(Color::Cyan)),
+                    ]));
+                }
+                _ => {}
+            }
+        }
+
+        ExerciseType::Cardio => {
+            // Duration
+            match (first.duration_min, last.duration_min) {
+                (Some(fd), Some(ld)) if count > 1 => {
+                    let delta = ld - fd;
+                    let (arrow, color) = float_trend(delta);
+                    lines.push(Line::from(vec![
+                        Span::raw("  Duration "),
+                        Span::styled(format!("{fd:.1}"), Style::default().fg(Color::DarkGray)),
+                        Span::raw(" → "),
+                        Span::styled(format!("{ld:.1} min"), Style::default().fg(Color::Green)),
+                        Span::raw("  "),
+                        Span::styled(format!("{arrow} {delta:+.1}"), Style::default().fg(color)),
+                    ]));
+                }
+                (Some(d), _) => {
+                    lines.push(Line::from(vec![
+                        Span::raw("  Duration "),
+                        Span::styled(format!("{d:.1} min"), Style::default().fg(Color::Green)),
+                    ]));
+                }
+                _ => {}
+            }
+
+            // Distance
+            match (first.distance_km, last.distance_km) {
+                (Some(fd), Some(ld)) if count > 1 => {
+                    let delta = ld - fd;
+                    let (arrow, color) = float_trend(delta);
+                    lines.push(Line::from(vec![
+                        Span::raw("  Distance "),
+                        Span::styled(format!("{fd:.2}"), Style::default().fg(Color::DarkGray)),
+                        Span::raw(" → "),
+                        Span::styled(format!("{ld:.2} km"), Style::default().fg(Color::Cyan)),
+                        Span::raw("  "),
+                        Span::styled(format!("{arrow} {delta:+.2}"), Style::default().fg(color)),
+                    ]));
+                }
+                (Some(d), _) => {
+                    lines.push(Line::from(vec![
+                        Span::raw("  Distance "),
+                        Span::styled(format!("{d:.2} km"), Style::default().fg(Color::Cyan)),
+                    ]));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    lines.push(Line::raw(""));
+    lines
+}
+
+/// @brief Draws per-exercise trend summaries, most-recently-performed exercise first.
 ///
-/// For each exercise, shows the session count and the change between its
-/// first and most recent logged session (sets/reps/weight for strength,
-/// duration/distance for cardio). Relies on `app.exercise_logs` already
-/// being sorted by `(exercise_name, logged_at)` so entries for the same
-/// exercise are contiguous.
+/// Shows every exercise from ::crate::models::summarize_exercise_logs; if there are more than fit
+/// in this third-of-the-screen panel, the least-recently-performed ones are the ones clipped —
+/// press [e] to open ::Screen::ExerciseHistory for the full, scrollable list.
 ///
 /// @param frame Frame to draw into.
 /// @param app Current application state (used only for `app.exercise_logs`).
 /// @param area Rectangle allotted to this panel.
 fn render_exercise_trends(frame: &mut Frame, app: &App, area: Rect) {
-    let logs = &app.exercise_logs;
+    let summaries = crate::models::summarize_exercise_logs(&app.exercise_logs);
 
-    let lines = if logs.is_empty() {
+    let lines = if summaries.is_empty() {
         vec![
             Line::raw(""),
             Line::from(Span::styled(
@@ -900,150 +1052,516 @@ fn render_exercise_trends(frame: &mut Frame, app: &App, area: Rect) {
             Line::raw("  [l] to log a session."),
         ]
     } else {
-        let mut lines: Vec<Line> = vec![];
-        let mut i = 0;
-        while i < logs.len() {
-            let name = &logs[i].exercise_name;
-            let first = &logs[i];
-            let mut last = first;
-            let mut count = 0usize;
-            while i < logs.len() && &logs[i].exercise_name == name {
-                last = &logs[i];
-                count += 1;
-                i += 1;
-            }
-
-            let session_label = if count == 1 { "1 session".to_string() } else { format!("{} sessions", count) };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {}", name),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!("  {}", session_label), Style::default().fg(Color::DarkGray)),
-            ]));
-
-            match first.exercise_type {
-                ExerciseType::Strength => {
-                    // Sets
-                    let sets_delta = last.sets - first.sets;
-                    let (sets_arrow, _) = int_trend(sets_delta);
-                    if count > 1 && sets_delta != 0 {
-                        lines.push(Line::from(vec![
-                            Span::raw("  Sets   "),
-                            Span::styled(first.sets.to_string(), Style::default().fg(Color::DarkGray)),
-                            Span::raw(" → "),
-                            Span::styled(format!("{} {}", last.sets, sets_arrow), Style::default().fg(Color::Green)),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::raw("  Sets   "),
-                            Span::styled(last.sets.to_string(), Style::default().fg(Color::Green)),
-                        ]));
-                    }
-
-                    // Reps
-                    let reps_delta = last.reps - first.reps;
-                    let (reps_arrow, _) = int_trend(reps_delta);
-                    if count > 1 && reps_delta != 0 {
-                        lines.push(Line::from(vec![
-                            Span::raw("  Reps   "),
-                            Span::styled(first.reps.to_string(), Style::default().fg(Color::DarkGray)),
-                            Span::raw(" → "),
-                            Span::styled(format!("{} {}", last.reps, reps_arrow), Style::default().fg(Color::Green)),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::raw("  Reps   "),
-                            Span::styled(last.reps.to_string(), Style::default().fg(Color::Green)),
-                        ]));
-                    }
-
-                    // Weight
-                    match (first.weight, last.weight) {
-                        (Some(fw), Some(lw)) if count > 1 => {
-                            let delta = lw - fw;
-                            let (arrow, color) = float_trend(delta);
-                            lines.push(Line::from(vec![
-                                Span::raw("  Weight "),
-                                Span::styled(format!("{:.1}", fw), Style::default().fg(Color::DarkGray)),
-                                Span::raw(" → "),
-                                Span::styled(format!("{:.1} kg", lw), Style::default().fg(Color::Cyan)),
-                                Span::raw("  "),
-                                Span::styled(format!("{} {:+.1}", arrow, delta), Style::default().fg(color)),
-                            ]));
-                        }
-                        (Some(w), _) => {
-                            lines.push(Line::from(vec![
-                                Span::raw("  Weight "),
-                                Span::styled(format!("{:.1} kg", w), Style::default().fg(Color::Cyan)),
-                            ]));
-                        }
-                        _ => {}
-                    }
-                }
-
-                ExerciseType::Cardio => {
-                    // Duration
-                    match (first.duration_min, last.duration_min) {
-                        (Some(fd), Some(ld)) if count > 1 => {
-                            let delta = ld - fd;
-                            let (arrow, color) = float_trend(delta);
-                            lines.push(Line::from(vec![
-                                Span::raw("  Duration "),
-                                Span::styled(format!("{:.1}", fd), Style::default().fg(Color::DarkGray)),
-                                Span::raw(" → "),
-                                Span::styled(format!("{:.1} min", ld), Style::default().fg(Color::Green)),
-                                Span::raw("  "),
-                                Span::styled(format!("{} {:+.1}", arrow, delta), Style::default().fg(color)),
-                            ]));
-                        }
-                        (Some(d), _) => {
-                            lines.push(Line::from(vec![
-                                Span::raw("  Duration "),
-                                Span::styled(format!("{:.1} min", d), Style::default().fg(Color::Green)),
-                            ]));
-                        }
-                        _ => {}
-                    }
-
-                    // Distance
-                    match (first.distance_km, last.distance_km) {
-                        (Some(fd), Some(ld)) if count > 1 => {
-                            let delta = ld - fd;
-                            let (arrow, color) = float_trend(delta);
-                            lines.push(Line::from(vec![
-                                Span::raw("  Distance "),
-                                Span::styled(format!("{:.2}", fd), Style::default().fg(Color::DarkGray)),
-                                Span::raw(" → "),
-                                Span::styled(format!("{:.2} km", ld), Style::default().fg(Color::Cyan)),
-                                Span::raw("  "),
-                                Span::styled(format!("{} {:+.2}", arrow, delta), Style::default().fg(color)),
-                            ]));
-                        }
-                        (Some(d), _) => {
-                            lines.push(Line::from(vec![
-                                Span::raw("  Distance "),
-                                Span::styled(format!("{:.2} km", d), Style::default().fg(Color::Cyan)),
-                            ]));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            lines.push(Line::raw(""));
-        }
-        lines
+        summaries.iter().flat_map(exercise_summary_lines).collect()
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Exercise Trends ")
+        .title(" Exercise Trends  ([e] see all) ")
         .border_style(Style::default().fg(Color::Cyan));
     frame.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
         area,
     );
+}
+
+/// @brief Draws every logged exercise's summary as a scrollable list, most-recently-performed
+/// first — the unclipped counterpart to the Reports screen's "Exercise Trends" panel.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `exercise_history_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the list.
+fn render_exercise_history(frame: &mut Frame, app: &mut App, area: Rect) {
+    let summaries = crate::models::summarize_exercise_logs(&app.exercise_logs);
+
+    if summaries.is_empty() {
+        let lines = vec![
+            Line::raw(""),
+            Line::from(Span::styled("  No sessions logged yet.", Style::default().fg(Color::DarkGray))),
+        ];
+        let block = Block::default().borders(Borders::ALL).title(" All Exercises ");
+        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+        return;
+    }
+
+    let items: Vec<ListItem> = summaries.iter().map(|s| ListItem::new(exercise_summary_lines(s))).collect();
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" All Exercises  (most recent first) "))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+    frame.render_stateful_widget(list, area, &mut app.exercise_history_list_state);
+}
+
+/// @brief Draws every individual logged session for one exercise (`app.session_log_exercise_name`),
+/// most recent first — the drill-down from ::render_exercise_history that exposes actual, editable
+/// `exercise_log` rows rather than just a first/last summary.
+/// @param frame Frame to draw into.
+/// @param app Current application state; `session_log_list_state` tracks selection/scroll.
+/// @param area Rectangle allotted to the list.
+fn render_exercise_session_log(frame: &mut Frame, app: &mut App, area: Rect) {
+    let entries = app.session_log_entries();
+    let title = format!(" {}  —  Sessions (most recent first) ", app.session_log_exercise_name);
+
+    if entries.is_empty() {
+        let lines = vec![
+            Line::raw(""),
+            Line::from(Span::styled("  No sessions logged yet.", Style::default().fg(Color::DarkGray))),
+        ];
+        let block = Block::default().borders(Borders::ALL).title(title);
+        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+        return;
+    }
+
+    let items: Vec<ListItem> = entries
+        .iter()
+        .map(|e| {
+            let date = e.logged_at.get(..16).unwrap_or(&e.logged_at);
+            let detail = match e.exercise_type {
+                ExerciseType::Strength => {
+                    let weight = e.weight.map(|w| format!("{w:.1} kg")).unwrap_or_else(|| "—".into());
+                    format!("Sets {}   Reps {}   Weight {}", e.sets, e.reps, weight)
+                }
+                ExerciseType::Cardio => {
+                    let duration = e.duration_min.map(|d| format!("{d:.1} min")).unwrap_or_else(|| "—".into());
+                    let distance = e.distance_km.map(|d| format!("{d:.2} km")).unwrap_or_else(|| "—".into());
+                    format!("Duration {duration}   Distance {distance}")
+                }
+            };
+            ListItem::new(format!("  {date}   {detail}"))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+    frame.render_stateful_widget(list, area, &mut app.session_log_list_state);
+}
+
+/// @brief Converts a SQLite `datetime('now')`-style timestamp (`"YYYY-MM-DD HH:MM:SS"`) into a
+/// fractional day count usable as a numeric X-axis coordinate.
+///
+/// Uses Howard Hinnant's civil-calendar-to-days-since-epoch formula rather than pulling in a date
+/// library for one conversion; values only need to be internally consistent (for spacing points
+/// by true elapsed time), not tied to any particular epoch.
+///
+/// @param s Timestamp string; anything shorter than 19 bytes or non-numeric in the date/time
+/// fields yields `0.0` so a bad row degrades to overlapping the origin rather than panicking.
+/// @return Days (with fractional part for the time-of-day) since 1970-01-01.
+fn timestamp_to_days(s: &str) -> f64 {
+    let field = |r: std::ops::Range<usize>| s.get(r).and_then(|v| v.parse::<i64>().ok());
+    let (Some(year), Some(month), Some(day), Some(hour), Some(min), Some(sec)) =
+        (field(0..4), field(5..7), field(8..10), field(11..13), field(14..16), field(17..19))
+    else {
+        return 0.0;
+    };
+
+    let (y, m) = if month <= 2 { (year - 1, month + 12) } else { (year, month) };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m - 3) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+
+    days as f64 + (hour * 3600 + min * 60 + sec) as f64 / 86400.0
+}
+
+/// @brief Inverse of the day-counting half of ::timestamp_to_days: recovers the calendar date for
+/// a whole day count since 1970-01-01, via Howard Hinnant's days-to-civil formula.
+/// @param z Days since 1970-01-01.
+/// @return `(year, month, day)`.
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// @brief Formats a fractional day count (as produced by ::timestamp_to_days) as a `YYYY-MM-DD`
+/// axis label, for chart bounds that don't have an original timestamp string handy.
+fn days_to_date_label(days: f64) -> String {
+    let (y, m, d) = civil_from_days(days.floor() as i64);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// @brief Current moment as a fractional day count, on the same 1970-01-01 epoch as
+/// ::timestamp_to_days, so the two are directly comparable.
+/// @return Days since 1970-01-01 UTC, or `0.0` if the system clock is somehow before the epoch.
+fn now_days() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() / 86400.0)
+        .unwrap_or(0.0)
+}
+
+/// @brief Windows a chronologically-ascending (oldest-first) slice to whichever of two candidate
+/// windows is smaller: the most recent `max_count` entries, or the entries from the last
+/// `max_days` days — picked independently, not intersected, so a long gap in one doesn't wipe out
+/// the other.
+///
+/// Used to keep the workout graphs focused on recent trend instead of stretching the X axis (and
+/// diluting the line) across months of history — training daily hits the day cap first, training
+/// sporadically hits the count cap first, either way the graph stays readable. Deliberately never
+/// returns empty when `entries` isn't: if nothing falls within `max_days` (e.g. an exercise you
+/// haven't touched in months), that's not a "shorter" window, it's a hole — so this falls back to
+/// the count-based window instead of hiding real history behind a false "not enough data" message.
+///
+/// @param entries Entries already in ascending time order (oldest first), as used for graphing.
+/// @param logged_at Accessor returning each entry's SQLite `datetime('now')`-style timestamp.
+/// @param max_count Maximum number of most-recent entries to keep.
+/// @param max_days How many days back from now to keep.
+/// @return A sub-slice of `entries`, still in ascending order, trimmed to the smaller window.
+fn recent_window<T>(entries: &[T], logged_at: impl Fn(&T) -> &str, max_count: usize, max_days: f64) -> &[T] {
+    let by_count = if entries.len() > max_count { &entries[entries.len() - max_count..] } else { entries };
+
+    let cutoff = now_days() - max_days;
+    let days_start = entries.iter().position(|e| timestamp_to_days(logged_at(e)) >= cutoff).unwrap_or(entries.len());
+    let by_days = &entries[days_start..];
+
+    if by_days.is_empty() || by_days.len() >= by_count.len() { by_count } else { by_days }
+}
+
+/// @brief Draws a short placeholder message inside a bordered, titled block, matching the
+/// empty/insufficient-data convention used by every trend and graph panel in the app.
+fn render_chart_placeholder(frame: &mut Frame, area: Rect, title: &str, message: &str) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "))
+        .border_style(Style::default().fg(Color::Yellow));
+    let lines = vec![
+        Line::raw(""),
+        Line::from(Span::styled(format!("  {message}"), Style::default().fg(Color::DarkGray))),
+    ];
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+}
+
+/// @brief One named, colored chart series: a display label, its line color, and its
+/// `(elapsed_days, value)` points.
+type ChartSeries<'a> = (&'a str, Color, Vec<(f64, f64)>);
+
+/// @brief Draws one time-scaled line chart overlaying every named series in its own color, on a
+/// shared X axis (elapsed time) and Y axis.
+///
+/// Shared by every graph panel in the app (personal metrics, strength sessions, cardio sessions)
+/// so they render with one consistent look. A series with no points is skipped rather than given
+/// an empty legend entry; if every series is empty, `empty_message` is shown instead of a chart.
+///
+/// @param frame Frame to draw into.
+/// @param area Rectangle allotted to the chart.
+/// @param title Block title text (space-padding is added here to match this app's block-title convention).
+/// @param series Named, colored point sets, each already converted to `(elapsed_days, value)`.
+/// @param y_title Label for the Y axis (e.g. `"Value"` for a mixed-unit chart, `"Weight (kg)"` for
+/// a single-unit one).
+/// @param empty_message Placeholder text shown when `series` has no points at all.
+fn render_time_chart(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    series: &[ChartSeries],
+    y_title: &str,
+    empty_message: &str,
+) {
+    let all_points: Vec<(f64, f64)> = series.iter().flat_map(|(_, _, pts)| pts.iter().copied()).collect();
+    if all_points.is_empty() {
+        render_chart_placeholder(frame, area, title, empty_message);
+        return;
+    }
+
+    let x_min = all_points.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+    let x_max = all_points.iter().map(|(x, _)| *x).fold(f64::NEG_INFINITY, f64::max);
+    let (x_min, x_max) = if x_max > x_min { (x_min, x_max) } else { (x_min - 0.5, x_max + 0.5) };
+
+    let y_lo = all_points.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
+    let y_hi = all_points.iter().map(|(_, y)| *y).fold(f64::NEG_INFINITY, f64::max);
+    let pad = ((y_hi - y_lo) * 0.1).max(1.0);
+    let (y_min, y_max) = (y_lo - pad, y_hi + pad);
+
+    let x_labels = vec![
+        Span::raw(days_to_date_label(x_min)),
+        Span::raw(days_to_date_label((x_min + x_max) / 2.0)),
+        Span::raw(days_to_date_label(x_max)),
+    ];
+    let y_labels = vec![
+        Span::raw(format!("{:.0}", y_min)),
+        Span::raw(format!("{:.0}", (y_min + y_max) / 2.0)),
+        Span::raw(format!("{:.0}", y_max)),
+    ];
+
+    let datasets: Vec<Dataset> = series
+        .iter()
+        .filter(|(_, _, pts)| !pts.is_empty())
+        .map(|(name, color, pts)| {
+            Dataset::default()
+                .name(*name)
+                .marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(*color))
+                .data(pts)
+        })
+        .collect();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "))
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let chart = Chart::new(datasets)
+        .block(block)
+        .x_axis(
+            Axis::default()
+                .title(Span::styled("Time", Style::default().fg(Color::Gray)))
+                .style(Style::default().fg(Color::DarkGray))
+                .bounds([x_min, x_max])
+                .labels(x_labels),
+        )
+        .y_axis(
+            Axis::default()
+                .title(Span::styled(y_title.to_string(), Style::default().fg(Color::Gray)))
+                .style(Style::default().fg(Color::DarkGray))
+                .bounds([y_min, y_max])
+                .labels(y_labels),
+        )
+        .legend_position(Some(LegendPosition::TopRight))
+        // Default (1/4 width, 1/4 height) hides the legend outright once a chart has more than a
+        // couple of series — e.g. one line per strength exercise easily exceeds it on a half-height
+        // panel. Loosened so a legend only disappears if it would truly overwhelm the chart.
+        .hidden_legend_constraints((Constraint::Percentage(60), Constraint::Percentage(90)));
+
+    frame.render_widget(chart, area);
+}
+
+/// @brief Draws every logged ::crate::models::PersonalMetric series (weight, heart rate, blood
+/// pressure) overlaid on a single time-scaled line chart.
+///
+/// All series share one X axis (elapsed time) and one Y axis (raw units — kg, bpm, mmHg all land
+/// in a comparable numeric range, so a shared scale stays readable rather than needing per-series
+/// normalization). Each series only plots the readings where that particular value was recorded,
+/// consistent with this app's existing graceful-degradation treatment of optional fields.
+///
+/// @param frame Frame to draw into.
+/// @param app Current application state (used only for `app.metrics`).
+/// @param area Rectangle allotted to the chart.
+fn render_metrics_graph(frame: &mut Frame, app: &App, area: Rect) {
+    if app.metrics.len() < 2 {
+        render_chart_placeholder(
+            frame,
+            area,
+            "Metrics Over Time",
+            "Need at least 2 entries to show a graph. Press [2/m] from the dashboard to log another.",
+        );
+        return;
+    }
+
+    // app.metrics is newest-first; plot chronologically instead.
+    let chronological: Vec<&crate::models::PersonalMetric> = app.metrics.iter().rev().collect();
+    let x_of = |m: &crate::models::PersonalMetric| timestamp_to_days(&m.recorded_at);
+
+    let weight_points: Vec<(f64, f64)> =
+        chronological.iter().filter_map(|m| m.weight_kg.map(|v| (x_of(m), v))).collect();
+    let hr_points: Vec<(f64, f64)> =
+        chronological.iter().filter_map(|m| m.heart_rate.map(|v| (x_of(m), v as f64))).collect();
+    let sys_points: Vec<(f64, f64)> =
+        chronological.iter().filter_map(|m| m.bp_systolic.map(|v| (x_of(m), v as f64))).collect();
+    let dia_points: Vec<(f64, f64)> =
+        chronological.iter().filter_map(|m| m.bp_diastolic.map(|v| (x_of(m), v as f64))).collect();
+
+    let series = [
+        ("Weight (kg)", Color::Yellow, weight_points),
+        ("Heart Rate (bpm)", Color::Red, hr_points),
+        ("BP Systolic (mmHg)", Color::Magenta, sys_points),
+        ("BP Diastolic (mmHg)", Color::Cyan, dia_points),
+    ];
+
+    render_time_chart(frame, area, "Metrics Over Time", &series, "Value", "No metrics logged yet.");
+}
+
+/// @brief Fixed cycle of theme colors used to give each distinct exercise its own line color on
+/// the workout graphs, since ratatui has no data-driven color generation of its own.
+///
+/// Excludes the app's reserved chrome colors (`Yellow` for borders, `DarkGray`/`Gray` for axes),
+/// biasing the more distinguishable colors first; with more exercises than colors, later exercises
+/// repeat colors — the legend's name is still the reliable way to tell them apart at that point.
+const EXERCISE_PALETTE: [Color; 10] = [
+    Color::Cyan,
+    Color::Green,
+    Color::Magenta,
+    Color::Red,
+    Color::LightCyan,
+    Color::LightGreen,
+    Color::LightMagenta,
+    Color::LightRed,
+    Color::Blue,
+    Color::LightBlue,
+];
+
+/// @brief Groups a slice of exercise-log entries by exercise name into an ordered list of
+/// `(name, entries)`, preserving first-appearance order within `logs` (not alphabetical), so each
+/// exercise gets a stable series/legend position and palette color across a render.
+/// @param logs Exercise-log entries, in the order they should be grouped from.
+/// @return One entry per distinct `exercise_name`, each holding every matching log row in order.
+fn group_by_exercise<'a>(logs: &[&'a ExerciseLogEntry]) -> Vec<(&'a str, Vec<&'a ExerciseLogEntry>)> {
+    let mut groups: Vec<(&str, Vec<&ExerciseLogEntry>)> = Vec::new();
+    for &entry in logs {
+        match groups.iter_mut().find(|(name, _)| *name == entry.exercise_name) {
+            Some((_, entries)) => entries.push(entry),
+            None => groups.push((entry.exercise_name.as_str(), vec![entry])),
+        }
+    }
+    groups
+}
+
+/// @brief Draws logged workout history as two stacked time-scaled charts: one line per strength
+/// exercise (its weight lifted) on top, one line per cardio exercise (its duration) below.
+///
+/// Split by ::crate::models::ExerciseType rather than overlaid on one shared chart: strength's
+/// weight (kg, potentially 100+) and cardio's duration (minutes) sit on different-enough scales
+/// that one shared axis would squash one of them flat. Within each chart, every distinct exercise
+/// gets its own colored line (see ::EXERCISE_PALETTE) so progress is comparable exercise-to-
+/// exercise, at the cost of the sets/reps/distance fields not shown here (see the Reports screen's
+/// Exercise Trends panel for those). Each exercise's line is windowed independently to its most
+/// recent 10 sessions or last 30 days, whichever is fewer (see ::recent_window), so one
+/// infrequently-changed exercise's ancient history doesn't stretch the shared X axis for everyone
+/// else on the chart. Sourced straight from `app.exercise_logs`, which already retains every
+/// logged session indefinitely — no separate long-term table needed.
+///
+/// @param frame Frame to draw into.
+/// @param app Current application state (used only for `app.exercise_logs`).
+/// @param area Rectangle allotted to both charts.
+fn render_workout_graph(frame: &mut Frame, app: &App, area: Rect) {
+    let halves = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    let mut logs: Vec<&ExerciseLogEntry> = app.exercise_logs.iter().collect();
+    logs.sort_by(|a, b| a.logged_at.cmp(&b.logged_at));
+
+    let strength: Vec<&ExerciseLogEntry> =
+        logs.iter().copied().filter(|e| e.exercise_type == ExerciseType::Strength).collect();
+    let cardio: Vec<&ExerciseLogEntry> =
+        logs.iter().copied().filter(|e| e.exercise_type == ExerciseType::Cardio).collect();
+
+    if strength.len() < 2 {
+        render_chart_placeholder(
+            frame,
+            halves[0],
+            "Strength Over Time",
+            "Need at least 2 logged strength sessions to show a graph.",
+        );
+    } else {
+        let x_of = |e: &ExerciseLogEntry| timestamp_to_days(&e.logged_at);
+        let series: Vec<ChartSeries> = group_by_exercise(&strength)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, entries))| {
+                let entries = recent_window(&entries, |e: &&ExerciseLogEntry| e.logged_at.as_str(), 10, 30.0);
+                let points: Vec<(f64, f64)> =
+                    entries.iter().filter_map(|e| e.weight.map(|w| (x_of(e), w))).collect();
+                (name, EXERCISE_PALETTE[i % EXERCISE_PALETTE.len()], points)
+            })
+            .collect();
+        render_time_chart(
+            frame,
+            halves[0],
+            "Strength Over Time",
+            &series,
+            "Weight (kg)",
+            "No strength sessions logged yet.",
+        );
+    }
+
+    if cardio.len() < 2 {
+        render_chart_placeholder(
+            frame,
+            halves[1],
+            "Cardio Over Time",
+            "Need at least 2 logged cardio sessions to show a graph.",
+        );
+    } else {
+        let x_of = |e: &ExerciseLogEntry| timestamp_to_days(&e.logged_at);
+        let series: Vec<ChartSeries> = group_by_exercise(&cardio)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, entries))| {
+                let entries = recent_window(&entries, |e: &&ExerciseLogEntry| e.logged_at.as_str(), 10, 30.0);
+                let points: Vec<(f64, f64)> =
+                    entries.iter().filter_map(|e| e.duration_min.map(|d| (x_of(e), d))).collect();
+                (name, EXERCISE_PALETTE[i % EXERCISE_PALETTE.len()], points)
+            })
+            .collect();
+        render_time_chart(
+            frame,
+            halves[1],
+            "Cardio Over Time",
+            &series,
+            "Duration (min)",
+            "No cardio sessions logged yet.",
+        );
+    }
+}
+
+/// @brief Draws every field logged for one exercise (`app.graphed_exercise_name`) over time,
+/// overlaid on a single chart: Sets/Reps/Weight for strength, Duration/Distance for cardio.
+///
+/// Unlike ::render_workout_graph (one line per exercise across everyone, restricted to a single
+/// metric so different exercises stay comparable), this chart is scoped to one exercise, so every
+/// field it tracks is shown — a scale mismatch between e.g. Sets and Weight is an accepted
+/// trade-off here since there's no cross-exercise comparison being drawn. Windowed to the most
+/// recent 10 sessions or last 30 days, whichever is fewer (see ::recent_window), so the trend line
+/// stays focused on recent performance instead of stretching across the exercise's full history.
+///
+/// @param frame Frame to draw into.
+/// @param app Current application state (used for `app.exercise_logs` and `app.graphed_exercise_name`).
+/// @param area Rectangle allotted to the chart.
+fn render_exercise_graph(frame: &mut Frame, app: &App, area: Rect) {
+    let mut logs: Vec<&ExerciseLogEntry> =
+        app.exercise_logs.iter().filter(|e| e.exercise_name == app.graphed_exercise_name).collect();
+    logs.sort_by(|a, b| a.logged_at.cmp(&b.logged_at));
+    let logs = recent_window(&logs, |e: &&ExerciseLogEntry| e.logged_at.as_str(), 10, 30.0);
+
+    let title = format!("{} Over Time", app.graphed_exercise_name);
+
+    if logs.len() < 2 {
+        render_chart_placeholder(
+            frame,
+            area,
+            &title,
+            "Need at least 2 logged sessions for this exercise to show a graph.",
+        );
+        return;
+    }
+
+    let x_of = |e: &ExerciseLogEntry| timestamp_to_days(&e.logged_at);
+    let is_cardio = logs[0].exercise_type == ExerciseType::Cardio;
+
+    let series: Vec<ChartSeries> = if is_cardio {
+        let duration_points: Vec<(f64, f64)> =
+            logs.iter().filter_map(|e| e.duration_min.map(|d| (x_of(e), d))).collect();
+        let distance_points: Vec<(f64, f64)> =
+            logs.iter().filter_map(|e| e.distance_km.map(|d| (x_of(e), d))).collect();
+        vec![
+            ("Duration (min)", Color::Green, duration_points),
+            ("Distance (km)", Color::Cyan, distance_points),
+        ]
+    } else {
+        let sets_points: Vec<(f64, f64)> = logs.iter().map(|e| (x_of(e), e.sets as f64)).collect();
+        let reps_points: Vec<(f64, f64)> = logs.iter().map(|e| (x_of(e), e.reps as f64)).collect();
+        let weight_points: Vec<(f64, f64)> =
+            logs.iter().filter_map(|e| e.weight.map(|w| (x_of(e), w))).collect();
+        vec![
+            ("Sets", Color::Green, sets_points),
+            ("Reps", Color::Cyan, reps_points),
+            ("Weight (kg)", Color::Yellow, weight_points),
+        ]
+    };
+
+    render_time_chart(frame, area, &title, &series, "Value", "No sessions logged yet.");
 }
 
 /// @brief Draws the full personal-metrics history as a scrollable, newest-first list.

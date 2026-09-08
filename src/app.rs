@@ -13,7 +13,7 @@ use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
 use crate::{database, models::{
-    Exercise, ExerciseLogEntry, ExercisePerformance, ExerciseType, Ingredient, IngredientType,
+    self, Exercise, ExerciseLogEntry, ExercisePerformance, ExerciseType, Ingredient, IngredientType,
     MealLogEntry, PersonalMetric, Recipe, RecipeComponent, RecipeIngredient, RecipeNutrition,
     RecipeType, WorkoutPlan,
 }};
@@ -27,12 +27,19 @@ pub enum Screen {
     Dashboard,
     WorkoutList,
     WorkoutDetail,
+    WorkoutGraph,
+    ExerciseGraph,
     AddWorkout,
     AddExercise,
+    UpdateExercise,
     ExerciseTypeSelect,
     LogMetrics,
     MetricsHistory,
+    MetricsGraph,
     Reports,
+    ExerciseHistory,
+    ExerciseSessionLog,
+    EditExerciseLog,
     PickExercise,
     AddToLibrary,
 
@@ -120,6 +127,8 @@ pub struct App {
     // Workout list
     pub workout_plans: Vec<WorkoutPlan>,
     pub workout_list_state: ListState,
+    /// @brief Scroll/selection state for ::Screen::ExerciseHistory's full exercise-summary list.
+    pub exercise_history_list_state: ListState,
 
     // Active plan exercises shown on dashboard
     pub active_exercises: Vec<Exercise>,
@@ -127,6 +136,18 @@ pub struct App {
     // Workout detail
     pub detail_plan_id: Option<i64>,
     pub current_exercises: Vec<Exercise>,
+    /// @brief Name of the exercise ::Screen::ExerciseGraph is currently charting, set when opened
+    /// from ::Screen::WorkoutDetail via `[g]` on the highlighted exercise.
+    pub graphed_exercise_name: String,
+    /// @brief Primary key of the exercise ::Screen::UpdateExercise is currently updating, set
+    /// when opened from ::Screen::WorkoutDetail via `[u]` on the highlighted exercise.
+    pub updating_exercise_id: Option<i64>,
+    /// @brief Exercise name ::Screen::ExerciseSessionLog is currently filtered to.
+    pub session_log_exercise_name: String,
+    /// @brief Scroll/selection state for ::Screen::ExerciseSessionLog's individual-session list.
+    pub session_log_list_state: ListState,
+    /// @brief Primary key of the `exercise_log` row ::Screen::EditExerciseLog is currently editing.
+    pub editing_log_id: Option<i64>,
     pub exercise_list_state: ListState,
 
     // Metrics
@@ -221,9 +242,15 @@ impl App {
             },
             workout_plans: vec![],
             workout_list_state: ListState::default(),
+            exercise_history_list_state: ListState::default(),
             active_exercises: vec![],
             detail_plan_id: None,
             current_exercises: vec![],
+            graphed_exercise_name: String::new(),
+            updating_exercise_id: None,
+            session_log_exercise_name: String::new(),
+            session_log_list_state: ListState::default(),
+            editing_log_id: None,
             exercise_list_state: ListState::default(),
             metrics: vec![],
             metrics_list_state: ListState::default(),
@@ -473,8 +500,13 @@ impl App {
             Screen::Dashboard => self.handle_dashboard_key(code),
             Screen::WorkoutList => self.handle_workout_list_key(code),
             Screen::WorkoutDetail => self.handle_workout_detail_key(code),
+            Screen::WorkoutGraph => self.handle_workout_graph_key(code),
+            Screen::ExerciseGraph => self.handle_exercise_graph_key(code),
             Screen::MetricsHistory => self.handle_metrics_history_key(code),
+            Screen::MetricsGraph => self.handle_metrics_graph_key(code),
             Screen::Reports => self.handle_reports_key(code),
+            Screen::ExerciseHistory => self.handle_exercise_history_key(code),
+            Screen::ExerciseSessionLog => self.handle_exercise_session_log_key(code),
             Screen::PickExercise => self.handle_pick_exercise_key(code),
             Screen::ExerciseTypeSelect => self.handle_type_select_key(code),
             Screen::RecipeList => self.handle_recipe_list_key(code),
@@ -1029,7 +1061,24 @@ impl App {
                         }
                     }
             }
+            KeyCode::Char('g') => self.screen = Screen::WorkoutGraph,
             _ => {}
+        }
+    }
+
+    /// @brief Handles key presses on ::Screen::WorkoutGraph: only exiting back to the workout list.
+    /// @param code The key that was pressed.
+    fn handle_workout_graph_key(&mut self, code: KeyCode) {
+        if let KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left = code {
+            self.screen = Screen::WorkoutList;
+        }
+    }
+
+    /// @brief Handles key presses on ::Screen::ExerciseGraph: only exiting back to the workout detail screen.
+    /// @param code The key that was pressed.
+    fn handle_exercise_graph_key(&mut self, code: KeyCode) {
+        if let KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left = code {
+            self.screen = Screen::WorkoutDetail;
         }
     }
 
@@ -1055,6 +1104,19 @@ impl App {
             }
             KeyCode::Char('n') => {
                 self.open_pick_exercise();
+            }
+            KeyCode::Char('g') => {
+                if let Some(i) = self.exercise_list_state.selected()
+                    && let Some(ex) = self.current_exercises.get(i) {
+                        self.graphed_exercise_name = ex.name.clone();
+                        self.screen = Screen::ExerciseGraph;
+                    }
+            }
+            KeyCode::Char('u') => {
+                if let Some(i) = self.exercise_list_state.selected()
+                    && let Some(ex) = self.current_exercises.get(i).cloned() {
+                        self.open_update_exercise(&ex);
+                    }
             }
             KeyCode::Char('l') => {
                 if !self.current_exercises.is_empty() {
@@ -1164,11 +1226,122 @@ impl App {
         }
     }
 
-    /// @brief Handles key presses on ::Screen::Reports: only exiting back to the dashboard.
+    /// @brief Handles key presses on ::Screen::Reports: exiting back to the dashboard, or opening
+    /// the full exercise history.
     /// @param code The key that was pressed.
     fn handle_reports_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Dashboard,
+            KeyCode::Char('e') => self.open_exercise_history(),
+            _ => {}
+        }
+    }
+
+    /// @brief Refreshes ::Screen::ExerciseHistory's selection and opens it, showing every logged
+    /// exercise's summary (see ::crate::models::summarize_exercise_logs), most recent first.
+    fn open_exercise_history(&mut self) {
+        let count = models::summarize_exercise_logs(&self.exercise_logs).len();
+        self.exercise_history_list_state = ListState::default();
+        if count > 0 {
+            self.exercise_history_list_state.select(Some(0));
+        }
+        self.screen = Screen::ExerciseHistory;
+    }
+
+    /// @brief Handles key presses on ::Screen::ExerciseHistory: navigate the full exercise-summary
+    /// list, and drill into one exercise's individual logged sessions.
+    /// @param code The key that was pressed.
+    fn handle_exercise_history_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Reports,
+            KeyCode::Up => {
+                let i = self.exercise_history_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.exercise_history_list_state.select(Some(i - 1));
+                }
+            }
+            KeyCode::Down => {
+                let len = models::summarize_exercise_logs(&self.exercise_logs).len();
+                let i = self.exercise_history_list_state.selected().unwrap_or(0);
+                if i + 1 < len {
+                    self.exercise_history_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Enter | KeyCode::Right => {
+                if let Some(i) = self.exercise_history_list_state.selected()
+                    && let Some(s) = models::summarize_exercise_logs(&self.exercise_logs).get(i) {
+                        self.open_exercise_session_log(s.name.clone());
+                    }
+            }
+            _ => {}
+        }
+    }
+
+    /// @brief Returns `app.exercise_logs` filtered to ::App::session_log_exercise_name, sorted
+    /// most-recently-logged first.
+    pub fn session_log_entries(&self) -> Vec<ExerciseLogEntry> {
+        let mut entries: Vec<ExerciseLogEntry> = self
+            .exercise_logs
+            .iter()
+            .filter(|e| e.exercise_name == self.session_log_exercise_name)
+            .cloned()
+            .collect();
+        entries.sort_by(|a, b| b.logged_at.cmp(&a.logged_at));
+        entries
+    }
+
+    /// @brief Opens ::Screen::ExerciseSessionLog for one exercise's individual logged sessions,
+    /// most recent first — lets a specific mis-logged session be found and corrected or removed,
+    /// which ::App::submit_update_exercise (the plan-row updater) doesn't cover: it always logs a
+    /// *new* entry rather than editing one already in history.
+    /// @param name Exercise name to filter `app.exercise_logs` down to.
+    fn open_exercise_session_log(&mut self, name: String) {
+        self.session_log_exercise_name = name;
+        self.session_log_list_state = ListState::default();
+        if !self.session_log_entries().is_empty() {
+            self.session_log_list_state.select(Some(0));
+        }
+        self.screen = Screen::ExerciseSessionLog;
+    }
+
+    /// @brief Handles key presses on ::Screen::ExerciseSessionLog: navigate, edit, and delete
+    /// individual logged sessions for ::App::session_log_exercise_name.
+    /// @param code The key that was pressed.
+    fn handle_exercise_session_log_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::ExerciseHistory,
+            KeyCode::Up => {
+                let i = self.session_log_list_state.selected().unwrap_or(0);
+                if i > 0 {
+                    self.session_log_list_state.select(Some(i - 1));
+                }
+            }
+            KeyCode::Down => {
+                let len = self.session_log_entries().len();
+                let i = self.session_log_list_state.selected().unwrap_or(0);
+                if i + 1 < len {
+                    self.session_log_list_state.select(Some(i + 1));
+                }
+            }
+            KeyCode::Char('e') => {
+                if let Some(i) = self.session_log_list_state.selected()
+                    && let Some(entry) = self.session_log_entries().get(i).cloned() {
+                        self.open_edit_exercise_log(&entry);
+                    }
+            }
+            KeyCode::Char('d') => {
+                if let Some(i) = self.session_log_list_state.selected()
+                    && let Some(entry) = self.session_log_entries().get(i).cloned() {
+                        let _ = database::delete_exercise_log_entry(&self.db, entry.id);
+                        self.refresh_exercise_logs();
+                        let new_len = self.session_log_entries().len();
+                        if new_len == 0 {
+                            self.session_log_list_state.select(None);
+                        } else {
+                            self.session_log_list_state.select(Some(i.min(new_len - 1)));
+                        }
+                    }
+            }
             _ => {}
         }
     }
@@ -1178,6 +1351,7 @@ impl App {
     fn handle_metrics_history_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left => self.screen = Screen::Dashboard,
+            KeyCode::Char('g') => self.screen = Screen::MetricsGraph,
             KeyCode::Up => {
                 let i = self.metrics_list_state.selected().unwrap_or(0);
                 if i > 0 {
@@ -1207,6 +1381,14 @@ impl App {
                     }
             }
             _ => {}
+        }
+    }
+
+    /// @brief Handles key presses on ::Screen::MetricsGraph: only exiting back to the history list.
+    /// @param code The key that was pressed.
+    fn handle_metrics_graph_key(&mut self, code: KeyCode) {
+        if let KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left = code {
+            self.screen = Screen::MetricsHistory;
         }
     }
 
@@ -1763,7 +1945,83 @@ impl App {
         self.input_index = if has_name { 1 } else { 0 };
         self.input_mode = true;
         self.status_msg = None;
+        self.updating_exercise_id = None;
         self.screen = Screen::AddExercise;
+    }
+
+    /// @brief Opens the "update exercise" form (::Screen::UpdateExercise) for the highlighted
+    /// exercise, prefilled with its current values.
+    ///
+    /// Added because the only prior way to bump an exercise's working weight/reps was `[n]` Add,
+    /// which always inserts a new plan row rather than updating the existing one — the root
+    /// cause of duplicate same-name rows piling up in a workout plan. On submit, this both
+    /// updates the plan row *and* logs a new history entry with the new values in one action
+    /// (see ::App::submit_update_exercise), since a separate "now go press `[l]`" step is too easy
+    /// to forget and would silently lose that session's data.
+    ///
+    /// @param ex The exercise to update (cloned by the caller before this is called, since the
+    /// caller borrows it from `self.current_exercises`).
+    fn open_update_exercise(&mut self, ex: &Exercise) {
+        self.detail_plan_id = Some(ex.workout_plan_id);
+        self.current_exercise_type = ex.exercise_type.clone();
+        self.updating_exercise_id = Some(ex.id);
+
+        match ex.exercise_type {
+            ExerciseType::Strength => {
+                self.input_fields = vec![
+                    ex.name.clone(),
+                    ex.sets.to_string(),
+                    ex.reps.to_string(),
+                    ex.weight.map(|w| w.to_string()).unwrap_or_default(),
+                ];
+                self.input_labels = vec!["Exercise Name", "Sets", "Reps", "Weight kg (optional)"];
+            }
+            ExerciseType::Cardio => {
+                self.input_fields = vec![
+                    ex.name.clone(),
+                    ex.duration_min.map(|d| d.to_string()).unwrap_or_default(),
+                    ex.distance_km.map(|d| d.to_string()).unwrap_or_default(),
+                ];
+                self.input_labels = vec!["Exercise Name", "Duration (min)", "Distance km (optional)"];
+            }
+        }
+        self.input_index = 0;
+        self.input_mode = true;
+        self.status_msg = None;
+        self.screen = Screen::UpdateExercise;
+    }
+
+    /// @brief Opens the "edit session" form (::Screen::EditExerciseLog) for one logged session,
+    /// prefilled with its current values, so a mis-logged entry can be corrected without losing
+    /// its timestamp or place in history.
+    /// @param entry The logged session to edit.
+    fn open_edit_exercise_log(&mut self, entry: &ExerciseLogEntry) {
+        self.current_exercise_type = entry.exercise_type.clone();
+        self.editing_log_id = Some(entry.id);
+
+        match entry.exercise_type {
+            ExerciseType::Strength => {
+                self.input_fields = vec![
+                    entry.exercise_name.clone(),
+                    entry.sets.to_string(),
+                    entry.reps.to_string(),
+                    entry.weight.map(|w| w.to_string()).unwrap_or_default(),
+                ];
+                self.input_labels = vec!["Exercise Name", "Sets", "Reps", "Weight kg (optional)"];
+            }
+            ExerciseType::Cardio => {
+                self.input_fields = vec![
+                    entry.exercise_name.clone(),
+                    entry.duration_min.map(|d| d.to_string()).unwrap_or_default(),
+                    entry.distance_km.map(|d| d.to_string()).unwrap_or_default(),
+                ];
+                self.input_labels = vec!["Exercise Name", "Duration (min)", "Distance km (optional)"];
+            }
+        }
+        self.input_index = 0;
+        self.input_mode = true;
+        self.status_msg = None;
+        self.screen = Screen::EditExerciseLog;
     }
 
     /// @brief Opens the "log metrics" form (::Screen::LogMetrics) with four blank fields (weight, heart rate, systolic, diastolic).
@@ -1790,9 +2048,13 @@ impl App {
     fn cancel_form(&mut self) {
         self.input_mode = false;
         self.status_msg = None;
+        self.updating_exercise_id = None;
+        self.editing_log_id = None;
         self.screen = match self.screen {
             Screen::AddWorkout => Screen::WorkoutList,
             Screen::AddExercise => Screen::ExerciseTypeSelect,
+            Screen::UpdateExercise => Screen::WorkoutDetail,
+            Screen::EditExerciseLog => Screen::ExerciseSessionLog,
             Screen::LogMetrics => Screen::Dashboard,
             Screen::AddToLibrary => Screen::PickExercise,
             Screen::AddRecipe => Screen::RecipeList,
@@ -1817,6 +2079,8 @@ impl App {
         match self.screen.clone() {
             Screen::AddWorkout => self.submit_add_workout(),
             Screen::AddExercise => self.submit_add_exercise(),
+            Screen::UpdateExercise => self.submit_update_exercise(),
+            Screen::EditExerciseLog => self.submit_edit_exercise_log(),
             Screen::LogMetrics => self.submit_log_metrics(),
             Screen::AddToLibrary => self.submit_add_to_library(),
             Screen::AddRecipe => self.submit_add_recipe(),
@@ -1919,6 +2183,116 @@ impl App {
         self.input_mode = false;
         self.status_msg = None;
         self.screen = Screen::WorkoutDetail;
+    }
+
+    /// @brief Validates and saves the "update exercise" form for ::App::updating_exercise_id,
+    /// updating the existing plan row in place *and* logging the new values as a fresh session in
+    /// history, then returns to ::Screen::WorkoutDetail.
+    ///
+    /// The plan-row update and the history log happen together in this one action deliberately:
+    /// this used to be a plain "edit" that only touched the plan row, requiring a separate `[l]`
+    /// Log Session press to actually record the change — a step easy to forget, silently losing
+    /// that session's data. Logging here always *appends* a new `exercise_log` row; no existing
+    /// history row is ever touched, so nothing is lost even if you update the same exercise
+    /// several times in a row.
+    ///
+    /// Rejects an empty (after trimming) name by setting ::App::status_msg and leaving the form
+    /// open. Numeric fields that fail to parse fall back to defaults (sets=3, reps=10) or `None`
+    /// rather than blocking submission, matching ::App::submit_add_exercise.
+    fn submit_update_exercise(&mut self) {
+        let name = self.input_fields[0].trim().to_string();
+        if name.is_empty() {
+            self.status_msg = Some("Exercise name cannot be empty.".into());
+            return;
+        }
+
+        let (sets, reps, weight, duration_min, distance_km) = match self.current_exercise_type {
+            ExerciseType::Strength => {
+                let sets: i32 = self.input_fields[1].trim().parse().unwrap_or(3);
+                let reps: i32 = self.input_fields[2].trim().parse().unwrap_or(10);
+                let weight: Option<f64> = self.input_fields[3].trim().parse().ok();
+                (sets, reps, weight, None, None)
+            }
+            ExerciseType::Cardio => {
+                let duration_min: Option<f64> = self.input_fields[1].trim().parse().ok();
+                let distance_km: Option<f64> = self.input_fields[2].trim().parse().ok();
+                (0, 0, None, duration_min, distance_km)
+            }
+        };
+
+        let perf = ExercisePerformance {
+            exercise_type: self.current_exercise_type.clone(),
+            sets,
+            reps,
+            weight,
+            duration_min,
+            distance_km,
+        };
+        if let Some(id) = self.updating_exercise_id
+            && let Err(e) = database::update_exercise(&self.db, id, &name, &perf) {
+                self.status_msg = Some(format!("Error: {e}"));
+                return;
+            }
+        if let Err(e) = database::log_exercise_session(&self.db, &name, &perf) {
+            self.status_msg = Some(format!("Error: {e}"));
+            return;
+        }
+        self.updating_exercise_id = None;
+        self.refresh_current_exercises();
+        self.refresh_plans();
+        self.refresh_exercise_logs();
+        self.input_mode = false;
+        self.status_msg = None;
+        self.screen = Screen::WorkoutDetail;
+    }
+
+    /// @brief Validates and saves the "edit session" form for ::App::editing_log_id, updating
+    /// that logged session in place (name/type/performance, but not its original timestamp), then
+    /// returns to ::Screen::ExerciseSessionLog.
+    ///
+    /// Rejects an empty (after trimming) name by setting ::App::status_msg and leaving the form
+    /// open. Numeric fields that fail to parse fall back to defaults (sets=3, reps=10) or `None`
+    /// rather than blocking submission, matching ::App::submit_add_exercise.
+    fn submit_edit_exercise_log(&mut self) {
+        let name = self.input_fields[0].trim().to_string();
+        if name.is_empty() {
+            self.status_msg = Some("Exercise name cannot be empty.".into());
+            return;
+        }
+
+        let (sets, reps, weight, duration_min, distance_km) = match self.current_exercise_type {
+            ExerciseType::Strength => {
+                let sets: i32 = self.input_fields[1].trim().parse().unwrap_or(3);
+                let reps: i32 = self.input_fields[2].trim().parse().unwrap_or(10);
+                let weight: Option<f64> = self.input_fields[3].trim().parse().ok();
+                (sets, reps, weight, None, None)
+            }
+            ExerciseType::Cardio => {
+                let duration_min: Option<f64> = self.input_fields[1].trim().parse().ok();
+                let distance_km: Option<f64> = self.input_fields[2].trim().parse().ok();
+                (0, 0, None, duration_min, distance_km)
+            }
+        };
+
+        let perf = ExercisePerformance {
+            exercise_type: self.current_exercise_type.clone(),
+            sets,
+            reps,
+            weight,
+            duration_min,
+            distance_km,
+        };
+        if let Some(id) = self.editing_log_id
+            && let Err(e) = database::update_exercise_log_entry(&self.db, id, &name, &perf) {
+                self.status_msg = Some(format!("Error: {e}"));
+                return;
+            }
+        self.editing_log_id = None;
+        self.session_log_exercise_name = name;
+        self.refresh_exercise_logs();
+        self.input_mode = false;
+        self.status_msg = None;
+        self.screen = Screen::ExerciseSessionLog;
     }
 
     /// @brief Saves the "log metrics" form and returns to ::Screen::Dashboard.

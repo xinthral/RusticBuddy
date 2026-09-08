@@ -78,7 +78,6 @@ pub struct Exercise {
     /// @brief Primary key in the `exercises` table.
     pub id: i64,
     /// @brief Foreign key to the owning ::WorkoutPlan.
-    #[allow(dead_code)]
     pub workout_plan_id: i64,
     /// @brief Exercise name (e.g. "Bench Press").
     pub name: String,
@@ -103,6 +102,8 @@ pub struct Exercise {
 /// originating plan exercise.
 #[derive(Debug, Clone)]
 pub struct ExerciseLogEntry {
+    /// @brief Primary key in the `exercise_log` table.
+    pub id: i64,
     /// @brief Name of the exercise that was performed.
     pub exercise_name: String,
     /// @brief Whether this session was strength or cardio.
@@ -118,8 +119,65 @@ pub struct ExerciseLogEntry {
     /// @brief Distance in kilometers (cardio only, optional).
     pub distance_km: Option<f64>,
     /// @brief Timestamp the session was logged, as stored by SQLite (`datetime('now')`).
-    #[allow(dead_code)]
     pub logged_at: String,
+}
+
+/// @brief One exercise's full logged history, reduced to its session count and its first vs. most
+/// recent performance — the shared basis for both the Reports "Exercise Trends" panel and the
+/// full, scrollable ::crate::app::Screen::ExerciseHistory list.
+#[derive(Debug, Clone)]
+pub struct ExerciseSummary {
+    /// @brief Name of the exercise these sessions belong to.
+    pub name: String,
+    /// @brief Number of logged sessions for this exercise.
+    pub session_count: usize,
+    /// @brief Performance on the earliest logged session.
+    pub first: ExercisePerformance,
+    /// @brief Performance on the most recently logged session.
+    pub last: ExercisePerformance,
+    /// @brief `logged_at` of the most recent session, kept for recency sorting/display.
+    pub last_logged_at: String,
+}
+
+/// @brief Groups a chronologically-ordered ::ExerciseLogEntry list into one ::ExerciseSummary per
+/// exercise, most-recently-performed exercise first.
+///
+/// @param logs Exercise log entries; must already be sorted by `(exercise_name, logged_at)` (as
+/// `database::get_exercise_logs` returns them) so each exercise's rows are contiguous.
+/// @return One summary per distinct exercise name, ordered by `last_logged_at` descending.
+pub fn summarize_exercise_logs(logs: &[ExerciseLogEntry]) -> Vec<ExerciseSummary> {
+    let performance_of = |e: &ExerciseLogEntry| ExercisePerformance {
+        exercise_type: e.exercise_type.clone(),
+        sets: e.sets,
+        reps: e.reps,
+        weight: e.weight,
+        duration_min: e.duration_min,
+        distance_km: e.distance_km,
+    };
+
+    let mut summaries = Vec::new();
+    let mut i = 0;
+    while i < logs.len() {
+        let name = logs[i].exercise_name.clone();
+        let first = &logs[i];
+        let mut last = first;
+        let mut count = 0usize;
+        while i < logs.len() && logs[i].exercise_name == name {
+            last = &logs[i];
+            count += 1;
+            i += 1;
+        }
+        summaries.push(ExerciseSummary {
+            name,
+            session_count: count,
+            first: performance_of(first),
+            last: performance_of(last),
+            last_logged_at: last.logged_at.clone(),
+        });
+    }
+
+    summaries.sort_by(|a, b| b.last_logged_at.cmp(&a.last_logged_at));
+    summaries
 }
 
 /// @brief A single point-in-time body-metrics reading.
