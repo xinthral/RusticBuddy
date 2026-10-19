@@ -251,6 +251,7 @@ category_enum!(IngredientType {
     Grain     => "Grain",
     Meat      => "Meat",
     Nuts      => "Nuts",
+    Protein   => "Protein",
     Seasoning => "Seasoning",
     Sweetener => "Sweetener",
     Vegetable => "Vegetable",
@@ -279,7 +280,7 @@ pub struct Ingredient {
     pub id: i64,
     /// @brief Ingredient name (e.g. "Chicken").
     pub name: String,
-    /// @brief Classification (e.g. Meat, Dairy, Pending).
+    /// @brief Classification (e.g. Protein, Dairy, Pending).
     pub category: IngredientType,
     /// @brief Quantity currently on hand, if the pantry stock is being tracked.
     pub stock_amount: Option<f64>,

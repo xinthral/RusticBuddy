@@ -50,6 +50,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         | Screen::LogMetrics
         | Screen::AddToLibrary
         | Screen::AddRecipe
+        | Screen::EditRecipeInstructions
         | Screen::AddRecipeIngredient
         | Screen::AddRecipeComponent
         | Screen::AddIngredient
@@ -108,6 +109,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         Screen::RecipeList => " Rustic Buddy  —  Recipes ",
         Screen::RecipeDetail => " Rustic Buddy  —  Recipe Detail ",
         Screen::AddRecipe => " Rustic Buddy  —  New Recipe ",
+        Screen::EditRecipeInstructions => " Rustic Buddy  —  Edit Instructions ",
         Screen::PickIngredient => " Rustic Buddy  —  Select Ingredient ",
         Screen::AddRecipeIngredient => " Rustic Buddy  —  Ingredient Amount ",
         Screen::PickSubRecipe => " Rustic Buddy  —  Select Sub-Recipe ",
@@ -148,15 +150,18 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         | Screen::EditExerciseLog
         | Screen::LogMetrics
         | Screen::AddToLibrary
-        | Screen::AddRecipe
         | Screen::AddRecipeIngredient
         | Screen::AddRecipeComponent
         | Screen::AddIngredient
         | Screen::SetIngredientStock
         | Screen::SetIngredientNutrition
         | Screen::SearchByName => {
-            "[Tab/Enter] Next Field  [Shift+Tab] Prev  [Enter] Submit on last field  [Esc] Cancel"
+            "[Tab/Enter] Next Field  [Shift+Tab] Prev  [Enter] Submit on last field  [Ctrl+S] Submit  [Esc] Cancel"
         }
+        Screen::AddRecipe => {
+            "[Tab] Next Field  [Shift+Tab] Prev  [Enter] Next Field / New Line in Instructions  [Ctrl+S] Save  [Esc] Cancel"
+        }
+        Screen::EditRecipeInstructions => "[Enter] New Line  [Ctrl+S] Save  [Esc] Cancel",
         Screen::ExerciseTypeSelect => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
         Screen::PickExercise => "[↑↓] Navigate  [Enter/→] Select  [n] Add to library  [←/Esc/q] Back",
         Screen::MetricsHistory => "[↑↓] Navigate  [d] Delete  [g] Graph  [←/Esc/q] Back",
@@ -166,7 +171,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Screen::ExerciseSessionLog => "[↑↓] Navigate  [e] Edit  [d] Delete  [←/Esc/q] Back",
         Screen::RecipeList => "[↑↓] Navigate  [Enter/→] Open  [n] New  [f] Favorite  [d] Delete  [←/Esc/q] Back",
         Screen::RecipeDetail => {
-            "[Tab] Switch Pane  [↑↓] Navigate  [n] Add  [Enter/→] Open Sub-Recipe  [l] Log Meal  [f] Favorite  [d] Remove  [←/Esc/q] Back"
+            "[Tab] Switch Pane  [↑↓] Navigate  [n] Add  [Enter/→] Open Sub-Recipe  [e] Edit Instructions  [l] Log Meal  [f] Favorite  [d] Remove  [←/Esc/q] Back"
         }
         Screen::PickIngredient => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
         Screen::PickSubRecipe => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
@@ -546,14 +551,16 @@ fn render_form(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(" Fill in the fields ");
     frame.render_widget(block, area);
 
+    // Multi-line fields absorb the leftover height, so the trailing filler collapses when one is present.
+    let has_multiline = (0..n).any(|i| app.is_multiline_field(i));
     let mut constraints: Vec<Constraint> = vec![Constraint::Length(1)];
-    for _ in 0..n {
-        constraints.push(Constraint::Length(3));
+    for i in 0..n {
+        constraints.push(if app.is_multiline_field(i) { Constraint::Min(5) } else { Constraint::Length(3) });
     }
     if app.status_msg.is_some() {
         constraints.push(Constraint::Length(3));
     }
-    constraints.push(Constraint::Min(0));
+    constraints.push(if has_multiline { Constraint::Length(0) } else { Constraint::Min(0) });
 
     let inner = Layout::default()
         .direction(Direction::Vertical)
@@ -574,7 +581,9 @@ fn render_form(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::DarkGray)
         };
         let cursor = if focused { "█" } else { "" };
-        let para = Paragraph::new(format!("{}{}", field, cursor))
+        let text = format!("{}{}", field, cursor);
+        let rect = inner[i + 1];
+        let mut para = Paragraph::new(text.clone())
             .style(Style::default().fg(if focused { Color::White } else { Color::Gray }))
             .block(
                 Block::default()
@@ -582,7 +591,18 @@ fn render_form(frame: &mut Frame, app: &App, area: Rect) {
                     .title(*label)
                     .border_style(border_style),
             );
-        frame.render_widget(para, inner[i + 1]);
+        if app.is_multiline_field(i) {
+            // Wrap, and scroll so the end of the text (where the cursor sits) stays visible.
+            let width = rect.width.saturating_sub(2).max(1) as usize;
+            let height = rect.height.saturating_sub(2) as usize;
+            let wrapped: usize = text
+                .split('\n')
+                .map(|line| line.chars().count().div_ceil(width).max(1))
+                .sum();
+            let scroll = wrapped.saturating_sub(height) as u16;
+            para = para.wrap(Wrap { trim: false }).scroll((scroll, 0));
+        }
+        frame.render_widget(para, rect);
     }
 
     if let Some(msg) = &app.status_msg {
@@ -1679,7 +1699,9 @@ fn render_recipe_detail(frame: &mut Frame, app: &mut App, area: Rect) {
             )));
         } else {
             lines.push(Line::from(Span::styled("  Instructions:", Style::default().add_modifier(Modifier::BOLD))));
-            lines.push(Line::raw(format!("  {}", recipe.instructions)));
+            for line in recipe.instructions.lines() {
+                lines.push(Line::raw(format!("  {line}")));
+            }
         }
         lines
     } else {

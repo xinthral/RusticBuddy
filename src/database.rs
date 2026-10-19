@@ -603,6 +603,19 @@ pub fn create_recipe(
     Ok(conn.last_insert_rowid())
 }
 
+/// @brief Replaces a recipe's instructions.
+/// @param conn Open database connection.
+/// @param id Primary key of the recipe to update.
+/// @param instructions New step-by-step cooking instructions.
+/// @return `Ok(())` on success.
+pub fn update_recipe_instructions(conn: &Connection, id: i64, instructions: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE recipes SET instructions = ?1 WHERE id = ?2",
+        params![instructions, id],
+    )?;
+    Ok(())
+}
+
 /// @brief Deletes a recipe and (via `ON DELETE CASCADE`) its ingredient links.
 /// @param conn Open database connection.
 /// @param id Primary key of the recipe to delete.

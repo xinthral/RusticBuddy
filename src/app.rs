@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
@@ -46,6 +46,7 @@ pub enum Screen {
     RecipeList,
     RecipeDetail,
     AddRecipe,
+    EditRecipeInstructions,
     PickIngredient,
     AddRecipeIngredient,
     PickSubRecipe,
@@ -444,7 +445,7 @@ impl App {
                 return Ok(());
             }
             if self.input_mode {
-                self.handle_input_key(key.code);
+                self.handle_input_key(key.code, key.modifiers);
             } else {
                 self.handle_nav_key(key.code);
             }
@@ -454,14 +455,20 @@ impl App {
 
     /// @brief Handles a key press while a text-entry form is active (::App::input_mode == true).
     ///
-    /// Esc cancels the form, Tab/Shift+Tab and Enter move between fields
-    /// (Enter on the last field submits via ::App::submit_form),
-    /// Backspace/character keys edit the focused field's text.
+    /// Esc cancels the form, Ctrl+S submits from any field, Tab/Shift+Tab and Enter
+    /// move between fields (Enter on the last field submits via ::App::submit_form),
+    /// Backspace/character keys edit the focused field's text. In a multi-line field
+    /// (::App::is_multiline_field) Enter inserts a newline instead.
     ///
     /// @param code The key that was pressed.
-    fn handle_input_key(&mut self, code: KeyCode) {
+    /// @param modifiers Modifier keys held during the press.
+    fn handle_input_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         match code {
             KeyCode::Esc => self.cancel_form(),
+            KeyCode::Char('s') if modifiers.contains(KeyModifiers::CONTROL) => self.submit_form(),
+            KeyCode::Enter if self.is_multiline_field(self.input_index) => {
+                self.input_fields[self.input_index].push('\n');
+            }
             KeyCode::Tab => {
                 self.input_index = (self.input_index + 1) % self.input_fields.len();
             }
@@ -487,6 +494,17 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// @brief Whether form field `i` on the current screen is a multi-line text area.
+    ///
+    /// Multi-line fields take Enter as a newline (see ::App::handle_input_key) and are
+    /// drawn taller by the form renderer.
+    ///
+    /// @param i Index into ::App::input_fields.
+    /// @return `true` for the recipe instructions field.
+    pub fn is_multiline_field(&self, i: usize) -> bool {
+        matches!((&self.screen, i), (Screen::AddRecipe, 5) | (Screen::EditRecipeInstructions, 0))
     }
 
     /// @brief Dispatches a navigation key press to the handler for the current ::Screen.
@@ -1496,6 +1514,9 @@ impl App {
             KeyCode::Char('l') => {
                 self.log_meal_from_recipe();
             }
+            KeyCode::Char('e') => {
+                self.open_edit_recipe_instructions();
+            }
             KeyCode::Char('f') => {
                 if let Some(id) = self.detail_recipe_id {
                     let _ = database::toggle_recipe_favorite(&self.db, id);
@@ -1857,12 +1878,29 @@ impl App {
             "Prep Time (min)",
             "Cook Time (min)",
             "Cook Temp",
-            "Instructions",
+            "Instructions (Enter = new line, Ctrl+S = save)",
         ];
         self.input_index = 0;
         self.input_mode = true;
         self.status_msg = None;
         self.screen = Screen::AddRecipe;
+    }
+
+    /// @brief Opens ::Screen::EditRecipeInstructions for the recipe in ::App::detail_recipe_id,
+    /// pre-filled with its current instructions. No-op if that recipe isn't loaded.
+    fn open_edit_recipe_instructions(&mut self) {
+        let Some(recipe) = self
+            .detail_recipe_id
+            .and_then(|id| self.recipes.iter().find(|r| r.id == id))
+        else {
+            return;
+        };
+        self.input_fields = vec![recipe.instructions.clone()];
+        self.input_labels = vec!["Instructions (Enter = new line, Ctrl+S = save)"];
+        self.input_index = 0;
+        self.input_mode = true;
+        self.status_msg = None;
+        self.screen = Screen::EditRecipeInstructions;
     }
 
     /// @brief Refreshes the ingredient library and opens ::Screen::PickIngredient with the first item selected.
@@ -1900,7 +1938,7 @@ impl App {
         self.input_fields = vec![String::new(), String::new()];
         self.input_labels = vec![
             "Ingredient Name",
-            "Category (Condiment/Craft/Culinary/Dairy/Fat/Fish/Fruit/Herb/Grain/Meat/Nuts/Seasoning/Sweetener/Vegetable)",
+            "Category (Condiment/Craft/Culinary/Dairy/Fat/Fish/Fruit/Herb/Grain/Meat/Nuts/Protein/Seasoning/Sweetener/Vegetable)",
         ];
         self.input_index = 0;
         self.input_mode = true;
@@ -2058,6 +2096,7 @@ impl App {
             Screen::LogMetrics => Screen::Dashboard,
             Screen::AddToLibrary => Screen::PickExercise,
             Screen::AddRecipe => Screen::RecipeList,
+            Screen::EditRecipeInstructions => Screen::RecipeDetail,
             Screen::AddRecipeIngredient => Screen::RecipeDetail,
             Screen::AddRecipeComponent => Screen::RecipeDetail,
             Screen::AddIngredient => {
@@ -2084,6 +2123,7 @@ impl App {
             Screen::LogMetrics => self.submit_log_metrics(),
             Screen::AddToLibrary => self.submit_add_to_library(),
             Screen::AddRecipe => self.submit_add_recipe(),
+            Screen::EditRecipeInstructions => self.submit_edit_recipe_instructions(),
             Screen::AddRecipeIngredient => self.submit_add_recipe_ingredient(),
             Screen::AddRecipeComponent => self.submit_add_recipe_component(),
             Screen::AddIngredient => self.submit_add_ingredient(),
@@ -2092,6 +2132,22 @@ impl App {
             Screen::SearchByName => self.submit_search_by_name(),
             _ => {}
         }
+    }
+
+    /// @brief Saves the edited instructions for ::App::detail_recipe_id and returns to ::Screen::RecipeDetail.
+    ///
+    /// On a database error, sets ::App::status_msg and leaves the form open.
+    fn submit_edit_recipe_instructions(&mut self) {
+        let Some(id) = self.detail_recipe_id else { return };
+        let instructions = self.input_fields[0].trim().to_string();
+        if let Err(e) = database::update_recipe_instructions(&self.db, id, &instructions) {
+            self.status_msg = Some(format!("Error: {e}"));
+            return;
+        }
+        self.refresh_recipes();
+        self.input_mode = false;
+        self.status_msg = None;
+        self.screen = Screen::RecipeDetail;
     }
 
     /// @brief Validates and saves the "add to library" form, then returns to ::Screen::PickExercise with the new entry selected.
