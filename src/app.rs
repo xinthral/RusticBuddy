@@ -18,6 +18,27 @@ use crate::{database, models::{
     RecipeType, WorkoutPlan,
 }};
 
+/// @brief Field labels shared by the new-recipe and edit-recipe forms (::Screen::AddRecipe,
+/// ::Screen::EditRecipe). Index 5 (instructions) is the multi-line field.
+const RECIPE_FORM_LABELS: [&str; 6] = [
+    "Recipe Name",
+    "Category (Baked/Boiled/Brewed/Crafted/Fried/Grilled/Mixed/Roasted/Sauteed/Steamed/Simmered)",
+    "Prep Time (min)",
+    "Cook Time (min)",
+    "Cook Temp",
+    "Instructions (Enter = new line, Ctrl+S = save)",
+];
+
+/// @brief The parsed contents of the new/edit recipe form; see ::App::parse_recipe_form.
+struct RecipeForm {
+    name: String,
+    category: RecipeType,
+    prep_min: i32,
+    cook_min: i32,
+    cook_temp: i32,
+    instructions: String,
+}
+
 /// @brief Identifies which screen of the TUI is currently displayed.
 ///
 /// Drives both ::crate::ui::render's dispatch and ::App::handle_nav_key's
@@ -46,7 +67,7 @@ pub enum Screen {
     RecipeList,
     RecipeDetail,
     AddRecipe,
-    EditRecipeInstructions,
+    EditRecipe,
     PickIngredient,
     AddRecipeIngredient,
     PickSubRecipe,
@@ -54,7 +75,7 @@ pub enum Screen {
     IngredientLibrary,
     AddIngredient,
     SetIngredientStock,
-    SetIngredientNutrition,
+    UpdateIngredient,
     MealHistory,
     Recipebook,
 
@@ -504,7 +525,7 @@ impl App {
     /// @param i Index into ::App::input_fields.
     /// @return `true` for the recipe instructions field.
     pub fn is_multiline_field(&self, i: usize) -> bool {
-        matches!((&self.screen, i), (Screen::AddRecipe, 5) | (Screen::EditRecipeInstructions, 0))
+        matches!((&self.screen, i), (Screen::AddRecipe | Screen::EditRecipe, 5))
     }
 
     /// @brief Dispatches a navigation key press to the handler for the current ::Screen.
@@ -1515,7 +1536,7 @@ impl App {
                 self.log_meal_from_recipe();
             }
             KeyCode::Char('e') => {
-                self.open_edit_recipe_instructions();
+                self.open_edit_recipe();
             }
             KeyCode::Char('f') => {
                 if let Some(id) = self.detail_recipe_id {
@@ -1679,7 +1700,7 @@ impl App {
                 self.open_set_ingredient_stock();
             }
             KeyCode::Char('u') => {
-                self.open_set_ingredient_nutrition();
+                self.open_update_ingredient();
             }
             KeyCode::Char('f') => {
                 if let Some(i) = self.ingredient_list_state.selected()
@@ -1835,14 +1856,15 @@ impl App {
         self.screen = Screen::SetIngredientStock;
     }
 
-    /// @brief Opens the "set nutrition" form (::Screen::SetIngredientNutrition) for the selected library
-    /// ingredient, prefilled with its current per-gram macros and density.
-    fn open_set_ingredient_nutrition(&mut self) {
+    /// @brief Opens the "update ingredient" form (::Screen::UpdateIngredient) for the selected library
+    /// ingredient, prefilled with its current name, per-gram macros and density.
+    fn open_update_ingredient(&mut self) {
         let Some(i) = self.ingredient_list_state.selected() else { return };
         let Some(ingredient) = self.ingredients.get(i) else { return };
 
         self.editing_ingredient_id = Some(ingredient.id);
         self.input_fields = vec![
+            ingredient.name.clone(),
             ingredient.calories_per_g.map(|v| v.to_string()).unwrap_or_default(),
             ingredient.protein_per_g.map(|v| v.to_string()).unwrap_or_default(),
             ingredient.fat_per_g.map(|v| v.to_string()).unwrap_or_default(),
@@ -1850,6 +1872,7 @@ impl App {
             ingredient.density_g_per_ml.map(|v| v.to_string()).unwrap_or_default(),
         ];
         self.input_labels = vec![
+            "Name",
             "Calories per gram (optional)",
             "Protein g per gram (optional)",
             "Fat g per gram (optional)",
@@ -1859,7 +1882,7 @@ impl App {
         self.input_index = 0;
         self.input_mode = true;
         self.status_msg = None;
-        self.screen = Screen::SetIngredientNutrition;
+        self.screen = Screen::UpdateIngredient;
     }
 
     /// @brief Opens the "new recipe" form (::Screen::AddRecipe) with name/category/timing/instructions fields.
@@ -1872,35 +1895,35 @@ impl App {
             String::from("0"),
             String::new(),
         ];
-        self.input_labels = vec![
-            "Recipe Name",
-            "Category (Baked/Boiled/Brewed/Crafted/Fried/Grilled/Mixed/Roasted/Sauteed/Steamed/Simmered)",
-            "Prep Time (min)",
-            "Cook Time (min)",
-            "Cook Temp",
-            "Instructions (Enter = new line, Ctrl+S = save)",
-        ];
+        self.input_labels = RECIPE_FORM_LABELS.to_vec();
         self.input_index = 0;
         self.input_mode = true;
         self.status_msg = None;
         self.screen = Screen::AddRecipe;
     }
 
-    /// @brief Opens ::Screen::EditRecipeInstructions for the recipe in ::App::detail_recipe_id,
-    /// pre-filled with its current instructions. No-op if that recipe isn't loaded.
-    fn open_edit_recipe_instructions(&mut self) {
+    /// @brief Opens ::Screen::EditRecipe for the recipe in ::App::detail_recipe_id, pre-filled with
+    /// its current name, category, timing and instructions. No-op if that recipe isn't loaded.
+    fn open_edit_recipe(&mut self) {
         let Some(recipe) = self
             .detail_recipe_id
             .and_then(|id| self.recipes.iter().find(|r| r.id == id))
         else {
             return;
         };
-        self.input_fields = vec![recipe.instructions.clone()];
-        self.input_labels = vec!["Instructions (Enter = new line, Ctrl+S = save)"];
+        self.input_fields = vec![
+            recipe.name.clone(),
+            recipe.category.as_str().to_string(),
+            recipe.prep_min.to_string(),
+            recipe.cook_min.to_string(),
+            recipe.cook_temp.to_string(),
+            recipe.instructions.clone(),
+        ];
+        self.input_labels = RECIPE_FORM_LABELS.to_vec();
         self.input_index = 0;
         self.input_mode = true;
         self.status_msg = None;
-        self.screen = Screen::EditRecipeInstructions;
+        self.screen = Screen::EditRecipe;
     }
 
     /// @brief Refreshes the ingredient library and opens ::Screen::PickIngredient with the first item selected.
@@ -2096,7 +2119,7 @@ impl App {
             Screen::LogMetrics => Screen::Dashboard,
             Screen::AddToLibrary => Screen::PickExercise,
             Screen::AddRecipe => Screen::RecipeList,
-            Screen::EditRecipeInstructions => Screen::RecipeDetail,
+            Screen::EditRecipe => Screen::RecipeDetail,
             Screen::AddRecipeIngredient => Screen::RecipeDetail,
             Screen::AddRecipeComponent => Screen::RecipeDetail,
             Screen::AddIngredient => {
@@ -2107,7 +2130,7 @@ impl App {
                 }
             }
             Screen::SetIngredientStock => Screen::IngredientLibrary,
-            Screen::SetIngredientNutrition => Screen::IngredientLibrary,
+            Screen::UpdateIngredient => Screen::IngredientLibrary,
             Screen::SearchByName => Screen::Search,
             _ => Screen::Dashboard,
         };
@@ -2123,24 +2146,28 @@ impl App {
             Screen::LogMetrics => self.submit_log_metrics(),
             Screen::AddToLibrary => self.submit_add_to_library(),
             Screen::AddRecipe => self.submit_add_recipe(),
-            Screen::EditRecipeInstructions => self.submit_edit_recipe_instructions(),
+            Screen::EditRecipe => self.submit_edit_recipe(),
             Screen::AddRecipeIngredient => self.submit_add_recipe_ingredient(),
             Screen::AddRecipeComponent => self.submit_add_recipe_component(),
             Screen::AddIngredient => self.submit_add_ingredient(),
             Screen::SetIngredientStock => self.submit_set_ingredient_stock(),
-            Screen::SetIngredientNutrition => self.submit_set_ingredient_nutrition(),
+            Screen::UpdateIngredient => self.submit_update_ingredient(),
             Screen::SearchByName => self.submit_search_by_name(),
             _ => {}
         }
     }
 
-    /// @brief Saves the edited instructions for ::App::detail_recipe_id and returns to ::Screen::RecipeDetail.
+    /// @brief Saves the "edit recipe" form for ::App::detail_recipe_id and returns to ::Screen::RecipeDetail.
     ///
-    /// On a database error, sets ::App::status_msg and leaves the form open.
-    fn submit_edit_recipe_instructions(&mut self) {
+    /// Validated the same way as ::App::submit_add_recipe (see ::App::parse_recipe_form). On an
+    /// empty name or a database error, sets ::App::status_msg and leaves the form open.
+    fn submit_edit_recipe(&mut self) {
         let Some(id) = self.detail_recipe_id else { return };
-        let instructions = self.input_fields[0].trim().to_string();
-        if let Err(e) = database::update_recipe_instructions(&self.db, id, &instructions) {
+        let Some(form) = self.parse_recipe_form() else { return };
+        if let Err(e) = database::update_recipe(
+            &self.db, id, &form.name, &form.category, form.prep_min, form.cook_min, form.cook_temp,
+            &form.instructions,
+        ) {
             self.status_msg = Some(format!("Error: {e}"));
             return;
         }
@@ -2371,25 +2398,35 @@ impl App {
         self.screen = Screen::Dashboard;
     }
 
-    /// @brief Validates and saves the "new recipe" form, then opens the new recipe in ::Screen::RecipeDetail.
+    /// @brief Reads the shared new/edit recipe form (field order: ::RECIPE_FORM_LABELS).
     ///
-    /// Rejects an empty (after trimming) name by setting ::App::status_msg
-    /// and leaving the form open. The category field is parsed case-insensitively,
-    /// falling back to Pending; numeric fields fall back to 0.
-    fn submit_add_recipe(&mut self) {
+    /// Rejects an empty (after trimming) name by setting ::App::status_msg and returning `None`.
+    /// The category field is parsed case-insensitively, falling back to Pending; numeric fields
+    /// fall back to 0.
+    fn parse_recipe_form(&mut self) -> Option<RecipeForm> {
         let name = self.input_fields[0].trim().to_string();
         if name.is_empty() {
             self.status_msg = Some("Recipe name cannot be empty.".into());
-            return;
+            return None;
         }
-        let category: RecipeType = self.input_fields[1].trim().parse().unwrap_or(RecipeType::Pending);
-        let prep_min: i32 = self.input_fields[2].trim().parse().unwrap_or(0);
-        let cook_min: i32 = self.input_fields[3].trim().parse().unwrap_or(0);
-        let cook_temp: i32 = self.input_fields[4].trim().parse().unwrap_or(0);
-        let instructions = self.input_fields[5].trim().to_string();
+        Some(RecipeForm {
+            name,
+            category: self.input_fields[1].trim().parse().unwrap_or(RecipeType::Pending),
+            prep_min: self.input_fields[2].trim().parse().unwrap_or(0),
+            cook_min: self.input_fields[3].trim().parse().unwrap_or(0),
+            cook_temp: self.input_fields[4].trim().parse().unwrap_or(0),
+            instructions: self.input_fields[5].trim().to_string(),
+        })
+    }
 
+    /// @brief Validates and saves the "new recipe" form, then opens the new recipe in ::Screen::RecipeDetail.
+    ///
+    /// Validated by ::App::parse_recipe_form; on an empty name the form stays open.
+    fn submit_add_recipe(&mut self) {
+        let Some(form) = self.parse_recipe_form() else { return };
         let id = match database::create_recipe(
-            &self.db, &name, &category, prep_min, cook_min, cook_temp, &instructions,
+            &self.db, &form.name, &form.category, form.prep_min, form.cook_min, form.cook_temp,
+            &form.instructions,
         ) {
             Ok(id) => id,
             Err(e) => {
@@ -2500,26 +2537,41 @@ impl App {
         self.screen = Screen::IngredientLibrary;
     }
 
-    /// @brief Saves the "set nutrition" form for ::App::editing_ingredient_id, then returns to ::Screen::IngredientLibrary.
+    /// @brief Saves the "update ingredient" form for ::App::editing_ingredient_id, then returns to
+    /// ::Screen::IngredientLibrary with the edited ingredient still selected.
     ///
-    /// Every field is optional: a blank or unparsable value clears that piece of data (`None`)
-    /// rather than blocking submission.
-    fn submit_set_ingredient_nutrition(&mut self) {
-        let calories_per_g: Option<f64> = self.input_fields[0].trim().parse().ok();
-        let protein_per_g: Option<f64> = self.input_fields[1].trim().parse().ok();
-        let fat_per_g: Option<f64> = self.input_fields[2].trim().parse().ok();
-        let fiber_per_g: Option<f64> = self.input_fields[3].trim().parse().ok();
-        let density_g_per_ml: Option<f64> = self.input_fields[4].trim().parse().ok();
+    /// The name is required and must not match another ingredient; on failure ::App::status_msg is
+    /// set and the form stays open. Every nutrition field is optional: a blank or unparsable value
+    /// clears that piece of data (`None`) rather than blocking submission.
+    fn submit_update_ingredient(&mut self) {
+        let name = self.input_fields[0].trim().to_string();
+        if name.is_empty() {
+            self.status_msg = Some("Ingredient name cannot be empty.".into());
+            return;
+        }
+        if self.ingredients.iter().any(|i| i.name == name && Some(i.id) != self.editing_ingredient_id) {
+            self.status_msg = Some(format!("An ingredient named \"{name}\" already exists."));
+            return;
+        }
+        let calories_per_g: Option<f64> = self.input_fields[1].trim().parse().ok();
+        let protein_per_g: Option<f64> = self.input_fields[2].trim().parse().ok();
+        let fat_per_g: Option<f64> = self.input_fields[3].trim().parse().ok();
+        let fiber_per_g: Option<f64> = self.input_fields[4].trim().parse().ok();
+        let density_g_per_ml: Option<f64> = self.input_fields[5].trim().parse().ok();
 
         if let Some(id) = self.editing_ingredient_id
-            && let Err(e) = database::set_ingredient_nutrition(
-                &self.db, id, calories_per_g, protein_per_g, fat_per_g, fiber_per_g, density_g_per_ml,
+            && let Err(e) = database::update_ingredient(
+                &self.db, id, &name, calories_per_g, protein_per_g, fat_per_g, fiber_per_g, density_g_per_ml,
             ) {
                 self.status_msg = Some(format!("Error: {e}"));
                 return;
             }
-        self.editing_ingredient_id = None;
+        // A rename can change the ingredient's place in the alphabetical list, so reselect it by id.
+        let edited_id = self.editing_ingredient_id.take();
         self.refresh_ingredients();
+        if let Some(idx) = self.ingredients.iter().position(|i| Some(i.id) == edited_id) {
+            self.ingredient_list_state.select(Some(idx));
+        }
         self.input_mode = false;
         self.status_msg = None;
         self.screen = Screen::IngredientLibrary;

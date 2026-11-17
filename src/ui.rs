@@ -50,12 +50,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         | Screen::LogMetrics
         | Screen::AddToLibrary
         | Screen::AddRecipe
-        | Screen::EditRecipeInstructions
+        | Screen::EditRecipe
         | Screen::AddRecipeIngredient
         | Screen::AddRecipeComponent
         | Screen::AddIngredient
         | Screen::SetIngredientStock
-        | Screen::SetIngredientNutrition
+        | Screen::UpdateIngredient
         | Screen::SearchByName => {
             render_form(frame, app, chunks[1]);
         }
@@ -109,7 +109,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         Screen::RecipeList => " Rustic Buddy  —  Recipes ",
         Screen::RecipeDetail => " Rustic Buddy  —  Recipe Detail ",
         Screen::AddRecipe => " Rustic Buddy  —  New Recipe ",
-        Screen::EditRecipeInstructions => " Rustic Buddy  —  Edit Instructions ",
+        Screen::EditRecipe => " Rustic Buddy  —  Edit Recipe ",
         Screen::PickIngredient => " Rustic Buddy  —  Select Ingredient ",
         Screen::AddRecipeIngredient => " Rustic Buddy  —  Ingredient Amount ",
         Screen::PickSubRecipe => " Rustic Buddy  —  Select Sub-Recipe ",
@@ -117,7 +117,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         Screen::IngredientLibrary => " Rustic Buddy  —  Ingredients ",
         Screen::AddIngredient => " Rustic Buddy  —  Add Ingredient ",
         Screen::SetIngredientStock => " Rustic Buddy  —  Set Stock ",
-        Screen::SetIngredientNutrition => " Rustic Buddy  —  Set Nutrition ",
+        Screen::UpdateIngredient => " Rustic Buddy  —  Update Ingredient ",
         Screen::MealHistory => " Rustic Buddy  —  Meal Log ",
         Screen::Recipebook => " Rustic Buddy  —  Recipebook ",
         Screen::Search => " Rustic Buddy  —  Search ",
@@ -154,14 +154,13 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         | Screen::AddRecipeComponent
         | Screen::AddIngredient
         | Screen::SetIngredientStock
-        | Screen::SetIngredientNutrition
+        | Screen::UpdateIngredient
         | Screen::SearchByName => {
             "[Tab/Enter] Next Field  [Shift+Tab] Prev  [Enter] Submit on last field  [Ctrl+S] Submit  [Esc] Cancel"
         }
-        Screen::AddRecipe => {
+        Screen::AddRecipe | Screen::EditRecipe => {
             "[Tab] Next Field  [Shift+Tab] Prev  [Enter] Next Field / New Line in Instructions  [Ctrl+S] Save  [Esc] Cancel"
         }
-        Screen::EditRecipeInstructions => "[Enter] New Line  [Ctrl+S] Save  [Esc] Cancel",
         Screen::ExerciseTypeSelect => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
         Screen::PickExercise => "[↑↓] Navigate  [Enter/→] Select  [n] Add to library  [←/Esc/q] Back",
         Screen::MetricsHistory => "[↑↓] Navigate  [d] Delete  [g] Graph  [←/Esc/q] Back",
@@ -171,12 +170,12 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Screen::ExerciseSessionLog => "[↑↓] Navigate  [e] Edit  [d] Delete  [←/Esc/q] Back",
         Screen::RecipeList => "[↑↓] Navigate  [Enter/→] Open  [n] New  [f] Favorite  [d] Delete  [←/Esc/q] Back",
         Screen::RecipeDetail => {
-            "[Tab] Switch Pane  [↑↓] Navigate  [n] Add  [Enter/→] Open Sub-Recipe  [e] Edit Instructions  [l] Log Meal  [f] Favorite  [d] Remove  [←/Esc/q] Back"
+            "[Tab] Switch Pane  [↑↓] Navigate  [n] Add  [Enter/→] Open Sub-Recipe  [e] Edit  [l] Log Meal  [f] Favorite  [d] Remove  [←/Esc/q] Back"
         }
         Screen::PickIngredient => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
         Screen::PickSubRecipe => "[↑↓] Navigate  [Enter/→] Select  [←/Esc/q] Back",
         Screen::IngredientLibrary => {
-            "[↑↓] Navigate  [n] New  [s] Set Stock  [u] Set Nutrition  [f] Favorite  [d] Delete  [←/Esc/q] Back"
+            "[↑↓] Navigate  [n] New  [s] Set Stock  [u] Update  [f] Favorite  [d] Delete  [←/Esc/q] Back"
         }
         Screen::MealHistory => "[↑↓] Navigate  [d] Delete  [←/Esc/q] Back",
         Screen::Search => "[↑↓] Navigate  [Enter/→] Select  [1-6] Jump  [←/Esc/q] Back",

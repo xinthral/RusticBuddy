@@ -475,19 +475,24 @@ pub fn get_ingredients(conn: &Connection) -> Result<Vec<Ingredient>> {
     .collect()
 }
 
-/// @brief Sets an ingredient's per-gram nutrition data and volume-conversion density.
+/// @brief Updates an ingredient's name, per-gram nutrition data and volume-conversion density.
+///
+/// Recipes reference ingredients by id, so a rename shows up in every recipe that uses it.
 /// @param conn Open database connection.
 /// @param id Primary key of the ingredient to update.
+/// @param name New ingredient name; must be unique (`ingredients.name` is `UNIQUE`).
 /// @param calories_per_g Calories per gram, or `None` to clear.
 /// @param protein_per_g Protein (g) per gram, or `None` to clear.
 /// @param fat_per_g Fat (g) per gram, or `None` to clear.
 /// @param fiber_per_g Fiber (g) per gram, or `None` to clear.
 /// @param density_g_per_ml Grams per milliliter (used to convert volume-unit amounts to grams
 /// in recipes), or `None` to clear.
-/// @return `Ok(())` on success.
-pub fn set_ingredient_nutrition(
+/// @return `Ok(())` on success, or an `rusqlite` error if another ingredient already has `name`.
+#[allow(clippy::too_many_arguments)] // one parameter per editable column
+pub fn update_ingredient(
     conn: &Connection,
     id: i64,
+    name: &str,
     calories_per_g: Option<f64>,
     protein_per_g: Option<f64>,
     fat_per_g: Option<f64>,
@@ -496,9 +501,10 @@ pub fn set_ingredient_nutrition(
 ) -> Result<()> {
     conn.execute(
         "UPDATE ingredients
-         SET calories_per_g = ?1, protein_per_g = ?2, fat_per_g = ?3, fiber_per_g = ?4, density_g_per_ml = ?5
-         WHERE id = ?6",
-        params![calories_per_g, protein_per_g, fat_per_g, fiber_per_g, density_g_per_ml, id],
+         SET name = ?1, calories_per_g = ?2, protein_per_g = ?3, fat_per_g = ?4, fiber_per_g = ?5,
+             density_g_per_ml = ?6
+         WHERE id = ?7",
+        params![name, calories_per_g, protein_per_g, fat_per_g, fiber_per_g, density_g_per_ml, id],
     )?;
     Ok(())
 }
@@ -603,15 +609,35 @@ pub fn create_recipe(
     Ok(conn.last_insert_rowid())
 }
 
-/// @brief Replaces a recipe's instructions.
+/// @brief Replaces a recipe's name, category, timing and instructions.
+///
+/// Ingredient links, sub-recipe links and favorite status are untouched. Parent recipes
+/// reference sub-recipes by id, so a rename shows up wherever this recipe is used.
 /// @param conn Open database connection.
 /// @param id Primary key of the recipe to update.
+/// @param name New recipe name.
+/// @param category Cooking-method classification.
+/// @param prep_min Preparation time in minutes.
+/// @param cook_min Cooking time in minutes.
+/// @param cook_temp Cooking temperature in degrees.
 /// @param instructions New step-by-step cooking instructions.
 /// @return `Ok(())` on success.
-pub fn update_recipe_instructions(conn: &Connection, id: i64, instructions: &str) -> Result<()> {
+#[allow(clippy::too_many_arguments)] // one parameter per editable column
+pub fn update_recipe(
+    conn: &Connection,
+    id: i64,
+    name: &str,
+    category: &RecipeType,
+    prep_min: i32,
+    cook_min: i32,
+    cook_temp: i32,
+    instructions: &str,
+) -> Result<()> {
     conn.execute(
-        "UPDATE recipes SET instructions = ?1 WHERE id = ?2",
-        params![instructions, id],
+        "UPDATE recipes
+         SET name = ?1, category = ?2, prep_min = ?3, cook_min = ?4, cook_temp = ?5, instructions = ?6
+         WHERE id = ?7",
+        params![name, category.as_str(), prep_min, cook_min, cook_temp, instructions, id],
     )?;
     Ok(())
 }
